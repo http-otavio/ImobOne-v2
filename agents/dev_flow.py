@@ -484,10 +484,11 @@ class DevFlowAgent:
                              Default: sessão interna ou projeto conforme disponível.
     """
 
-    # Diretório padrão para prompts resolvidos por cliente — usa sessão interna
-    # quando o filesystem montado não permite escrita em novos subdiretórios.
-    _DEFAULT_PROMPTS_DIR: Path = Path(
-        "/sessions/magical-trusting-wright/prompts/clients"
+    # Diretório padrão para prompts resolvidos por cliente.
+    # Usa /app/prompts/clients dentro do container Docker ou o diretório
+    # relativo ao projeto em desenvolvimento local.
+    _DEFAULT_PROMPTS_DIR: Path = Path("/app/prompts/clients") if Path("/app").exists() else (
+        Path(__file__).parent.parent / "prompts" / "clients"
     )
 
     def __init__(
