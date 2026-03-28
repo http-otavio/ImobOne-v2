@@ -185,8 +185,10 @@ def _build_imovel_repository():
     supabase_key = os.getenv("SUPABASE_KEY", "")
     if supabase_url and supabase_key:
         try:
-            from tools.embeddings import SupabaseImovelRepository
-            return SupabaseImovelRepository(url=supabase_url, key=supabase_key)
+            from supabase import create_client
+            from agents.ingestion import SupabaseImovelRepository
+            supabase_client = create_client(supabase_url, supabase_key)
+            return SupabaseImovelRepository(supabase_client=supabase_client)
         except Exception as exc:
             logger.warning("SupabaseImovelRepository falhou (%s) — usando in-memory.", exc)
     else:
@@ -224,6 +226,79 @@ def _build_fake_consultant_fn(onboarding: dict):
         )
 
     return consultant_fn
+
+
+def _build_llm_consultant_fn(onboarding: dict):
+    """
+    Consultor LLM real — carrega consultant_base.md como system prompt e usa
+    Claude Haiku para gerar respostas durante o QA de jornadas.
+
+    Isso garante que o qa_journeys avalie o prompt real, não um mock.
+    Fallback para _build_fake_consultant_fn se ANTHROPIC_API_KEY ausente
+    ou se o arquivo de prompt não for encontrado.
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        logger.warning("[QA] ANTHROPIC_API_KEY ausente — consultant_fn usando mock.")
+        return _build_fake_consultant_fn(onboarding)
+
+    # Localiza consultant_base.md: container Docker ou desenvolvimento local
+    from pathlib import Path
+    prompt_candidates = [
+        Path("/app/prompts/base/consultant_base.md"),       # Docker
+        Path(__file__).parent / "_prompts_build" / "consultant_base.md",  # local
+        Path(__file__).parent / "prompts" / "base" / "consultant_base.md",
+    ]
+    system_prompt_raw = None
+    for candidate in prompt_candidates:
+        if candidate.exists():
+            system_prompt_raw = candidate.read_text(encoding="utf-8")
+            logger.info("[QA] consultant_base.md carregado de %s", candidate)
+            break
+
+    if not system_prompt_raw:
+        logger.warning("[QA] consultant_base.md não encontrado — consultant_fn usando mock.")
+        return _build_fake_consultant_fn(onboarding)
+
+    # Substitui variáveis do template com dados do onboarding
+    substituicoes = {
+        "{{NOME_CONSULTOR}}":    onboarding.get("nome_consultor", "Sofia"),
+        "{{NOME_IMOBILIARIA}}":  onboarding.get("nome_imobiliaria", "Imobiliária"),
+        "{{CIDADE_ATUACAO}}":    onboarding.get("cidade_atuacao", "São Paulo"),
+        "{{TIPO_ATUACAO}}":      onboarding.get("tipo_atuacao", "vendas de alto padrão"),
+        "{{PALAVRAS_PROIBIDAS}}": ", ".join(
+            onboarding.get("palavras_proibidas", ["baratinho", "promoção", "urgente"])
+            if isinstance(onboarding.get("palavras_proibidas"), list)
+            else [onboarding.get("palavras_proibidas", "baratinho, promoção, urgente")]
+        ),
+        "{{EXEMPLOS_SAUDACAO}}": onboarding.get("exemplos_saudacao", "Boa tarde, seja bem-vindo."),
+        "{{REGRAS_ESPECIFICAS}}": onboarding.get("regras_especificas", ""),
+        "{{PORTFOLIO_CONTEXTO}}": onboarding.get("portfolio_contexto",
+            "Portfólio de imóveis de alto padrão em São Paulo."),
+    }
+    system_prompt = system_prompt_raw
+    for placeholder, valor in substituicoes.items():
+        system_prompt = system_prompt.replace(placeholder, str(valor))
+
+    import anthropic
+    llm = anthropic.AsyncAnthropic(api_key=api_key)
+    _log = logging.getLogger("qa_journeys.llm_consultant")
+
+    async def llm_consultant_fn(mensagens: list[dict]) -> str:
+        """Chama Claude Haiku com o system prompt do consultant_base.md."""
+        try:
+            response = await llm.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=512,
+                system=system_prompt,
+                messages=mensagens,
+            )
+            return response.content[0].text.strip()
+        except Exception as exc:
+            _log.warning("[QA] LLM consultant falhou (%s) — retornando string vazia.", exc)
+            return ""
+
+    return llm_consultant_fn
 
 
 class _FakePlacesClient:
@@ -539,7 +614,7 @@ def _build_qa_journeys_adapter(onboarding: dict):
     """Agente 8 — QAJourneysAgent com consultant_fn e evaluator_fn injetados."""
     from agents.qa_journeys import QAJourneysAgent
 
-    consultant_fn = _build_fake_consultant_fn(onboarding)
+    consultant_fn = _build_llm_consultant_fn(onboarding)   # usa prompt real via Claude Haiku
     evaluator_fn  = _build_evaluator_fn()
     agent         = QAJourneysAgent(consultant_fn=consultant_fn, evaluator_fn=evaluator_fn)
 
