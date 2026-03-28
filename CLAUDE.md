@@ -30,7 +30,7 @@ O produto final é um **consultor digital de luxo** que atende leads via WhatsAp
 cd /opt/ImobOne-v2
 git pull
 docker build -t imovel-ai-agents:latest .
-docker service update --image imovel-ai-agents:latest imob_agents
+docker stack deploy -c docker-compose.yml imob
 ```
 
 ---
