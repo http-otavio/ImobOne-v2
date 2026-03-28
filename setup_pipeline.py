@@ -486,7 +486,7 @@ def _build_evaluator_fn():
             try:
                 msg = await client.messages.create(
                     model="claude-haiku-4-5-20251001",
-                    max_tokens=80,
+                    max_tokens=150,  # 80 cortava sugestões longas → string não fechada
                     system=(
                         'Avalie se o critério foi atendido pela resposta do consultor. '
                         'Complete o JSON: {"passou": <bool>, "sugestao": "<vazio se passou, '
@@ -503,11 +503,29 @@ def _build_evaluator_fn():
                     'true, "sugestao": ""}',
                 ).strip()
                 raw = '{"passou":' + continuacao
+
+                # Reparação defensiva de JSON truncado:
+                # 1) Fecha string aberta que não foi terminada
+                # 2) Fecha objeto se necessário
                 if not raw.rstrip().endswith("}"):
-                    raw = raw.rstrip() + "}"
+                    # Conta aspas para detectar string aberta (número ímpar = aberta)
+                    n_aspas = raw.count('"') - raw.count('\\"')
+                    if n_aspas % 2 == 1:
+                        raw = raw.rstrip() + '"}'   # fecha string + objeto
+                    else:
+                        raw = raw.rstrip() + "}"    # fecha apenas objeto
+
                 dados = json.loads(raw)
                 return bool(dados["passou"]), dados.get("sugestao", "")
             except Exception as exc:
+                # Fallback de emergência: extrai apenas o booleano via regex
+                import re as _re
+                raw_fallback = '{"passou":' + (continuacao if "continuacao" in dir() else "")
+                m = _re.search(r'"passou"\s*:\s*(true|false)', raw_fallback, _re.I)
+                if m:
+                    resultado = m.group(1).lower() == "true"
+                    _log.warning("LLM evaluator JSON inválido — extraído via regex: %s", resultado)
+                    return resultado, ""
                 _log.warning("LLM evaluator falhou (%s) — aprovando por padrão.", exc)
                 return True, ""
 
