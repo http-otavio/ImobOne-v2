@@ -1,0 +1,61 @@
+# ── Ambiente e segredos ───────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# ── Virtualenvs ───────────────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+
+# ── IDEs ──────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Runtime: artefatos gerados pelos agentes (não commitar — gerados no deploy)
+agents/clients/
+prompts/clients/
+
+# ── Runtime: relatórios de pipeline por cliente (gerados, não versionados)
+clients/*/pipeline_report.json
+
+# ── Node (dashboard frontend) ─────────────────────────────────────────────────
+dashboard/frontend/node_modules/
+dashboard/frontend/.next/
+dashboard/frontend/out/
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+# (docker-compose.yml e Dockerfile são versionados — apenas artefatos locais excluídos)
+*.tar
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── _prompts_build — INCLUÍDO no git (necessário para o docker build) ─────────
+# NÃO adicionar _prompts_build/ aqui — esses arquivos precisam chegar ao VPS
+# via git para serem bakeados na imagem Docker.

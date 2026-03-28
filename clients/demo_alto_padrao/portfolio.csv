@@ -1,0 +1,8 @@
+id,nome,tipo,bairro,cidade,estado,preco,area_m2,quartos,suites,vagas,descricao,lat,lng,status
+IM001,Cobertura Duplex Jardins,cobertura,Jardins,São Paulo,SP,4500000,320,4,4,4,"Cobertura duplex com terraço gourmet e piscina privativa. Vista panorâmica para a cidade. Acabamento italiano.",−23.5726,−46.6541,disponivel
+IM002,Apartamento Garden Itaim,apartamento,Itaim Bibi,São Paulo,SP,2800000,180,3,3,3,"Apartamento garden com jardim privativo de 120m². Varanda ampla. Infraestrutura de condomínio cinco estrelas.",−23.5853,−46.6853,disponivel
+IM003,Casa de Alto Padrão VNC,casa,Vila Nova Conceição,São Paulo,SP,7200000,480,5,5,6,"Casa com projeto assinado. Piscina, sauna, home theater e área de lazer completa. Terreno de 600m².",−23.5923,−46.6741,disponivel
+IM004,Apartamento Panorâmico Morumbi,apartamento,Morumbi,São Paulo,SP,3100000,210,4,4,4,"Andar alto com vista para o Parque do Estado. Lazer completo: academia, piscina aquecida e espaço gourmet.",−23.6189,−46.7228,disponivel
+IM005,Studio de Luxo Jardins,studio,Jardins,São Paulo,SP,1950000,90,1,1,2,"Studio premium com mezanino. Ideal para executivo ou investidor. Localização estratégica a 300m da Av. Paulista.",−23.5648,−46.6544,disponivel
+IM006,Lançamento Torre Ícone Itaim,lancamento,Itaim Bibi,São Paulo,SP,5800000,280,4,4,4,"Pré-lançamento exclusivo. Unidades limitadas. Entrega prevista para 2028. Arquitetura premiada internacionalmente.",−23.5831,−46.6872,lancamento
+IM007,Penthouse Alto de Pinheiros,penthouse,Alto de Pinheiros,São Paulo,SP,6100000,350,4,4,5,"Penthouse com terraço de 200m² e piscina infinita. Único andar inteiro do empreendimento. Entregue em 2024.",−23.5431,−46.7219,disponivel

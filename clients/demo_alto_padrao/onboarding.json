@@ -1,0 +1,54 @@
+{
+  "client_id": "demo_alto_padrao",
+  "nome_imobiliaria": "Requiem Imóveis",
+  "cidade_atuacao": "São Paulo",
+  "tipo_atuacao": ["vendas", "lancamentos"],
+  "portfolio_path": "clients/demo_alto_padrao/portfolio.csv",
+
+  "nome_consultor": "Sofia",
+  "tom_desejado": "Sofisticado, preciso e discreto. Nunca apressado. Jamais usa gírias ou linguagem informal. Trata o cliente pelo nome quando possível.",
+  "exemplos_comunicacao": [
+    "Bom dia, [Nome]. A Requiem tem um portfólio criterioso — gostaríamos de entender melhor o que você busca antes de sugerir qualquer imóvel.",
+    "Posso te enviar as plantas em alta resolução agora mesmo, se preferir."
+  ],
+
+  "segmento_preco": "acima de R$ 2.000.000",
+  "regioes_atuacao": ["Jardins", "Itaim Bibi", "Vila Nova Conceição", "Morumbi", "Alto de Pinheiros"],
+  "foco_perfil_lead": "Comprador qualificado com decisão própria ou investidor de alto patrimônio",
+
+  "crm_webhook_url": "",
+  "crm_webhook_token": "",
+
+  "elevenlabs_voice_id": "EXAVITQu4vr4xnSDxMaL",
+
+  "whatsapp_numero_operador": "+5511999990001",
+  "whatsapp_numero_corretores": ["+5511999990002", "+5511999990003"],
+
+  "palavras_proibidas": ["barato", "promoção", "pechincha", "desconto agressivo", "oferta imperdível"],
+  "frases_proibidas": ["não tem como baixar mais", "tá na faixa"],
+
+  "horario_atendimento": {
+    "inicio": "07:00",
+    "fim": "23:00",
+    "fuso": "America/Sao_Paulo"
+  },
+
+  "regras_especificas": [
+    "Nunca revelar que é IA a menos que diretamente perguntado",
+    "Clientes VIP de lançamento têm prioridade absoluta na fila de atendimento",
+    "Qualquer negociação acima de R$ 5M deve ser escalada imediatamente para o corretor sênior",
+    "Não discutir financiamento bancário — a imobiliária trabalha exclusivamente com compradores com recursos próprios ou investidores qualificados"
+  ],
+
+  "coordenadas_portfolio": {
+    "lat": -23.5874,
+    "lng": -46.6826
+  },
+
+  "meta_setup": {
+    "sla_dias_uteis": 5,
+    "data_contrato": "2026-03-20",
+    "valor_setup": 20000,
+    "valor_mensal": 4500
+  }
+}

@@ -1,0 +1,139 @@
+# docker-compose.yml — ImobOne-v2 Docker Stack
+#
+# Deploy via Docker Swarm (sem docker-compose instalado no VPS):
+#
+#   docker build -t imovel-ai-agents:latest .
+#   docker stack deploy -c docker-compose.yml imovel-ai
+#
+# Remover stack:
+#   docker stack rm imovel-ai
+#
+# Logs em tempo real:
+#   docker service logs -f imovel-ai_agents
+#   docker service logs -f imovel-ai_dashboard
+#
+# IMPORTANTE: a rede OtavioNet deve existir antes do deploy.
+#   Verificar: docker network ls | grep OtavioNet
+#   Redis acessível em: redis://n8n_n8n_redis:6379 (serviço na mesma rede)
+
+version: "3.9"
+
+services:
+
+  # ─── Serviço de agentes ─────────────────────────────────────────────────
+  agents:
+    image: imovel-ai-agents:latest
+    env_file:
+      - .env
+    networks:
+      - OtavioNet
+    volumes:
+      # Diretórios escritos pelo dev_flow em runtime:
+      #   agents/clients/{client_id}/consultant.py
+      #   prompts/clients/{client_id}/consultant_prompt.md
+      # Sem volumes persistentes esses arquivos somem ao reiniciar o container.
+      # O dashboard também lê de clients/ — volume compartilhado entre serviços.
+      - agents_clients:/app/agents/clients
+      - prompts_clients:/app/prompts/clients
+      - pipeline_clients:/app/clients
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        window: 60s
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    healthcheck:
+      # Verifica conectividade com o Redis usando o cliente Python já disponível
+      # na imagem — sem instalar redis-cli separado.
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import os, redis, sys
+          try:
+              r = redis.Redis.from_url(os.environ.get('REDIS_URL', 'redis://n8n_n8n_redis:6379'))
+              r.ping()
+              sys.exit(0)
+          except Exception as e:
+              print(f"Redis ping falhou: {e}", flush=True)
+              sys.exit(1)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ─── Dashboard FastAPI ───────────────────────────────────────────────────
+  dashboard:
+    image: imovel-ai-agents:latest
+    command: ["python", "-m", "uvicorn", "dashboard.backend.main:app",
+              "--host", "0.0.0.0", "--port", "8000",
+              "--workers", "2", "--log-level", "info"]
+    env_file:
+      - .env
+    networks:
+      - OtavioNet
+    ports:
+      - "8000:8000"
+    volumes:
+      # Dashboard lê pipeline_report.json e onboarding.json dos clientes
+      - pipeline_clients:/app/clients:ro
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        window: 60s
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import httpx, sys; r = httpx.get('http://localhost:8000/health', timeout=5); sys.exit(0 if r.status_code == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+# ─── Volumes persistentes ────────────────────────────────────────────────────
+# Named volumes gerenciados pelo Docker — sobrevivem a restarts e redeploys.
+# Para inspecionar: docker volume ls | grep imovel-ai
+# Para backup:      docker run --rm -v imovel-ai_pipeline_clients:/data alpine tar czf - /data
+volumes:
+  # /app/agents/clients — consultant.py gerado pelo dev_flow por cliente
+  agents_clients:
+
+  # /app/prompts/clients — prompt resolvido por cliente (consultant_prompt.md)
+  prompts_clients:
+
+  # /app/clients — onboarding.json, config.json, pipeline_report.json por cliente
+  # Compartilhado (rw) pelo agents e (ro) pelo dashboard
+  pipeline_clients:
+
+# ─── Redes ──────────────────────────────────────────────────────────────────
+networks:
+  OtavioNet:
+    external: true
