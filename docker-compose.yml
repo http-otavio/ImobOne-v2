@@ -179,6 +179,9 @@ volumes:
 # ─── Redes ────────────────────────────────────────────────────────────────────
 # Rede overlay interna ao stack — Redis, agents e dashboard se comunicam
 # por nome de serviço sem exposição externa.
+# attachable: true permite que containers avulsos (docker run) se conectem
+# à rede para rodar setup_pipeline.py e outros scripts de administração.
 networks:
   imob_net:
     driver: overlay
+    attachable: true
