@@ -1,0 +1,193 @@
+{
+  "_comentario": "Dados fictícios para smoke test da Fase 2. Imobiliária de vendas em São Paulo, segmento alto padrão, 3 corretores, sem CRM externo.",
+  "client_id": "demo_imobiliaria_vendas",
+  "versao_schema": "1.0",
+
+  "imobiliaria": {
+    "nome_imobiliaria": "Ávora Imóveis",
+    "cidade_atuacao": "São Paulo",
+    "segmentos": ["vendas"],
+    "site": "https://www.avoraimoveis.com.br",
+    "portais_anuncio": ["ZAP Imóveis", "VivaReal", "Site próprio"],
+    "ticket_medio_vendas": 2800000.00,
+    "ticket_medio_aluguel": null,
+    "ticket_medio_temporada": null
+  },
+
+  "portfolio": {
+    "portfolio_path": "clients/demo_imobiliaria_vendas/portfolio.csv",
+    "portfolio_url": null,
+    "total_imoveis_estimado": 87
+  },
+
+  "corretores": [
+    {
+      "nome": "Renata Cavalcanti",
+      "telefone_whatsapp": "+5511998001001",
+      "especialidade": ["vendas"],
+      "bairros_regioes": ["Jardins", "Itaim Bibi", "Vila Nova Conceição"],
+      "horario_inicio": "09:00",
+      "horario_fim": "19:00",
+      "dias_atendimento": ["seg", "ter", "qua", "qui", "sex", "sab"]
+    },
+    {
+      "nome": "Marcelo Drummond",
+      "telefone_whatsapp": "+5511998002002",
+      "especialidade": ["vendas"],
+      "bairros_regioes": ["Moema", "Vila Olímpia", "Brooklin"],
+      "horario_inicio": "09:00",
+      "horario_fim": "18:00",
+      "dias_atendimento": ["seg", "ter", "qua", "qui", "sex"]
+    },
+    {
+      "nome": "Isabela Fontana",
+      "telefone_whatsapp": "+5511998003003",
+      "especialidade": ["vendas"],
+      "bairros_regioes": ["Pinheiros", "Alto de Pinheiros", "Perdizes", "Pompeia"],
+      "horario_inicio": "10:00",
+      "horario_fim": "20:00",
+      "dias_atendimento": ["ter", "qua", "qui", "sex", "sab"]
+    }
+  ],
+
+  "consultor": {
+    "nome_consultor": "Sofia",
+    "genero": "feminino",
+    "tom_desejado": "sofisticado",
+    "identidade": "membro_equipe",
+    "resposta_se_perguntado_ia": "Sou a Sofia, assistente da Ávora Imóveis. Estou aqui para ajudá-lo a encontrar exatamente o imóvel que você procura — com todas as informações de que precisar.",
+    "frases_abertura": [
+      "Olá! Sou a Sofia, da Ávora Imóveis. É um prazer recebê-lo. Como posso ajudá-lo hoje?",
+      "Boa tarde! Falo com Sofia, da Ávora Imóveis. Estou à disposição para o que precisar.",
+      "Olá, seja bem-vindo à Ávora Imóveis. Sou a Sofia. Em que posso ajudá-lo?"
+    ],
+    "frases_encerramento": [
+      "Foi um prazer falar com você. Qualquer dúvida, estarei aqui. Tenha um excelente dia!",
+      "Obrigada pelo contato. Fique à vontade para nos chamar quando quiser. Até logo!",
+      "Fico feliz em ter ajudado. Nossa equipe está à sua disposição. Até breve!"
+    ],
+    "palavras_proibidas": [
+      "barato", "promocional", "oferta", "negócio da china",
+      "super desconto", "oportunidade imperdível", "imperdível",
+      "mais em conta", "precinho"
+    ],
+    "palavras_preferidas": [
+      "exclusivo", "curadoria", "patrimônio", "bem localizado",
+      "referência", "sofisticado", "bem-estar", "lifestyle",
+      "empreendimento", "entrega"
+    ]
+  },
+
+  "whatsapp": {
+    "numero_whatsapp": "+5511930000001",
+    "bsp_provider": "360dialog",
+    "bsp_api_key": "DEMO_360DIALOG_API_KEY_SUBSTITUIR",
+    "bsp_url": null
+  },
+
+  "distribuicao": {
+    "estrategia": "por_bairro",
+    "timeout_corretor_minutos": 20,
+    "acao_sem_resposta_corretor": "notificar_proximo_da_lista",
+    "notificar_corretor_score_minimo": 7
+  },
+
+  "qualificacao": {
+    "vendas": {
+      "perguntas_obrigatorias": [
+        "O imóvel é para uso próprio ou investimento?",
+        "Qual o orçamento disponível para a aquisição?",
+        "Há imóvel a ser vendido antes da compra?",
+        "Qual a previsão de prazo para concluir a compra?",
+        "Quais regiões de São Paulo são do seu interesse?",
+        "Quantos dormitórios e qual tamanho aproximado está buscando?",
+        "Tem preferência por imóvel pronto ou aceita planta?"
+      ],
+      "criterios_lead_quente": [
+        "Budget confirmado acima de R$ 1,5M",
+        "Prazo de compra em até 90 dias",
+        "Sem imóvel a vender (compra sem dependência de venda)",
+        "Solicitou visita, planta ou documentação",
+        "Perguntou sobre condições de financiamento",
+        "Mencionou bairro específico do portfólio"
+      ],
+      "criterios_lead_frio": [
+        "Prazo indefinido ou superior a 12 meses",
+        "Precisa vender imóvel atual sem prazo claro",
+        "Budget abaixo de R$ 1M",
+        "Apenas pesquisando, sem intenção declarada",
+        "Não respondeu perguntas de qualificação após 3 turnos"
+      ]
+    },
+    "alugueis": null,
+    "lancamentos": null,
+    "temporada": null
+  },
+
+  "regras": {
+    "pode_falar_desconto": true,
+    "desconto_maximo_percent": 3.0,
+    "parceiros_financiamento": [
+      "Itaú BBA", "Bradesco Prime", "Santander Select", "Caixa Econômica Federal"
+    ],
+    "garantias_aceitas_aluguel": [],
+    "regras_adicionais": [
+      "Nunca revelar o nome do proprietário sem autorização prévia do corretor",
+      "Não informar preço de outros imóveis do portfólio para fins de comparação — encaminhar ao corretor",
+      "Sempre oferecer tour virtual antes de agendar visita presencial",
+      "Imóveis com proprietário residente: avisar com 24h de antecedência para visitas",
+      "Não prometer exclusividade de proposta sem confirmação do corretor responsável"
+    ]
+  },
+
+  "crm": {
+    "crm_nome": null,
+    "crm_webhook_url": null,
+    "crm_api_key": null,
+    "campos_customizados": {}
+  },
+
+  "horarios": {
+    "horario_inicio": "08:00",
+    "horario_fim": "20:00",
+    "atende_sabado": true,
+    "atende_domingo": false,
+    "feriados_nacionais": true,
+    "feriados_locais": ["2026-07-25", "2026-11-20"],
+    "comportamento_fora_horario": "informar_horario_e_registrar_lead",
+    "mensagem_fora_horario": "Olá! Nosso horário de atendimento é de {horario_inicio} às {horario_fim}, de segunda a sábado. Registrei sua mensagem com carinho e {nome_consultor} entrará em contato assim que possível. Até logo!"
+  },
+
+  "escalacao": {
+    "gatilhos_escalacao": [
+      "Lead solicita falar diretamente com um corretor",
+      "Lead demonstra insatisfação ou impaciência",
+      "Pergunta sobre condições que fogem do escopo do consultor (desconto acima do limite, permuta, herança)",
+      "Lead menciona concorrente com oferta específica",
+      "Score de intenção acima de 15 em uma única conversa",
+      "Lead repete a mesma pergunta por 3 vezes sem satisfação",
+      "Conversa ativa acima de 40 minutos sem conclusão"
+    ],
+    "mensagem_transferencia": "Entendido! Vou conectar você com um de nossos especialistas, que poderá atendê-lo com ainda mais detalhes. Em breve ele entrará em contato pelo WhatsApp. Obrigada e até logo!",
+    "canal_alerta_operador": "whatsapp",
+    "contato_alerta": "+5511998000000",
+    "escalar_apos_n_mensagens_sem_resolucao": 6
+  },
+
+  "dashboard": {
+    "usuarios_dashboard": [
+      "gestor@avoraimoveis.com.br",
+      "socio@avoraimoveis.com.br"
+    ],
+    "relatorio_semanal": true,
+    "email_relatorio": "gestor@avoraimoveis.com.br",
+    "metricas_prioritarias": [
+      "leads_atendidos",
+      "taxa_qualificacao",
+      "score_medio_intencao",
+      "agendamentos_realizados",
+      "tempo_medio_resposta",
+      "conversao_visita"
+    ]
+  }
+}

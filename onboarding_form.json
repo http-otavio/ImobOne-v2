@@ -1,0 +1,748 @@
+{
+  "_meta": {
+    "versao": "1.0",
+    "descricao": "Representação do formulário de onboarding. Cada campo define tipo, label, obrigatoriedade e condicionais.",
+    "tipos_suportados": ["text", "number", "boolean", "select", "multi_select", "textarea", "file_upload", "url", "phone", "email", "time", "date", "list_of_objects"],
+    "condicionais": "show_if: {campo: valor} — campo só aparece se a condição for verdadeira"
+  },
+
+  "secoes": [
+
+    {
+      "id": "imobiliaria",
+      "titulo": "Dados da Imobiliária",
+      "descricao": "Informações gerais sobre a empresa",
+      "campos": [
+        {
+          "id": "client_id",
+          "label": "ID do cliente",
+          "tipo": "text",
+          "obrigatorio": true,
+          "placeholder": "ex: alfa_imoveis_sp",
+          "descricao": "Identificador único em snake_case, sem espaços ou caracteres especiais",
+          "validacao": {"pattern": "^[a-z0-9_]{3,50}$"}
+        },
+        {
+          "id": "imobiliaria.nome_imobiliaria",
+          "label": "Nome da imobiliária",
+          "tipo": "text",
+          "obrigatorio": true,
+          "placeholder": "ex: Alfa Imóveis"
+        },
+        {
+          "id": "imobiliaria.cidade_atuacao",
+          "label": "Cidade principal de atuação",
+          "tipo": "text",
+          "obrigatorio": true,
+          "placeholder": "ex: São Paulo"
+        },
+        {
+          "id": "imobiliaria.segmentos",
+          "label": "Segmentos ativos",
+          "tipo": "multi_select",
+          "obrigatorio": true,
+          "opcoes": [
+            {"value": "vendas",      "label": "Vendas"},
+            {"value": "alugueis",    "label": "Aluguéis"},
+            {"value": "lancamentos", "label": "Lançamentos"},
+            {"value": "temporada",   "label": "Temporada"}
+          ]
+        },
+        {
+          "id": "imobiliaria.site",
+          "label": "Site da imobiliária",
+          "tipo": "url",
+          "obrigatorio": false,
+          "placeholder": "https://www.alfaimoveis.com.br"
+        },
+        {
+          "id": "imobiliaria.portais_anuncio",
+          "label": "Portais onde anuncia",
+          "tipo": "multi_select",
+          "obrigatorio": false,
+          "opcoes": [
+            {"value": "ZAP Imóveis",   "label": "ZAP Imóveis"},
+            {"value": "VivaReal",      "label": "VivaReal"},
+            {"value": "OLX",           "label": "OLX"},
+            {"value": "Imovelweb",     "label": "Imovelweb"},
+            {"value": "Site próprio",  "label": "Site próprio"},
+            {"value": "Instagram",     "label": "Instagram"},
+            {"value": "Outro",         "label": "Outro"}
+          ]
+        },
+        {
+          "id": "imobiliaria.ticket_medio_vendas",
+          "label": "Ticket médio — Vendas (R$)",
+          "tipo": "number",
+          "obrigatorio": true,
+          "show_if": {"campo": "imobiliaria.segmentos", "contem": "vendas"},
+          "placeholder": "ex: 1500000",
+          "descricao": "Valor médio dos imóveis de venda do portfólio"
+        },
+        {
+          "id": "imobiliaria.ticket_medio_aluguel",
+          "label": "Ticket médio — Aluguel (R$/mês)",
+          "tipo": "number",
+          "obrigatorio": true,
+          "show_if": {"campo": "imobiliaria.segmentos", "contem": "alugueis"},
+          "placeholder": "ex: 8000"
+        },
+        {
+          "id": "imobiliaria.ticket_medio_temporada",
+          "label": "Ticket médio — Temporada (R$/diária)",
+          "tipo": "number",
+          "obrigatorio": true,
+          "show_if": {"campo": "imobiliaria.segmentos", "contem": "temporada"},
+          "placeholder": "ex: 1200"
+        }
+      ]
+    },
+
+    {
+      "id": "portfolio",
+      "titulo": "Portfólio de Imóveis",
+      "descricao": "Arquivo com os imóveis ou URL para ingestão automática",
+      "campos": [
+        {
+          "id": "portfolio.portfolio_path",
+          "label": "Upload do portfólio",
+          "tipo": "file_upload",
+          "obrigatorio": false,
+          "formatos_aceitos": ["csv", "xlsx", "xls", "json", "pdf"],
+          "descricao": "CSV, Excel, JSON ou PDF com os imóveis. Ao menos este campo ou a URL abaixo são obrigatórios."
+        },
+        {
+          "id": "portfolio.portfolio_url",
+          "label": "URL do portal para ingestão automática",
+          "tipo": "url",
+          "obrigatorio": false,
+          "placeholder": "https://www.alfaimoveis.com.br/imoveis",
+          "descricao": "URL do site ou portal. O agente de ingestão fará o scraping."
+        },
+        {
+          "id": "portfolio.total_imoveis_estimado",
+          "label": "Total estimado de imóveis no portfólio",
+          "tipo": "number",
+          "obrigatorio": false,
+          "placeholder": "ex: 120"
+        }
+      ]
+    },
+
+    {
+      "id": "corretores",
+      "titulo": "Corretores",
+      "descricao": "Adicione todos os corretores que receberão leads qualificados",
+      "tipo_secao": "list_of_objects",
+      "min_itens": 1,
+      "campos_por_item": [
+        {
+          "id": "nome",
+          "label": "Nome completo",
+          "tipo": "text",
+          "obrigatorio": true
+        },
+        {
+          "id": "telefone_whatsapp",
+          "label": "WhatsApp (com DDI)",
+          "tipo": "phone",
+          "obrigatorio": true,
+          "placeholder": "+5511999999999"
+        },
+        {
+          "id": "especialidade",
+          "label": "Segmentos de atuação",
+          "tipo": "multi_select",
+          "obrigatorio": true,
+          "opcoes": [
+            {"value": "vendas",      "label": "Vendas"},
+            {"value": "alugueis",    "label": "Aluguéis"},
+            {"value": "lancamentos", "label": "Lançamentos"},
+            {"value": "temporada",   "label": "Temporada"}
+          ]
+        },
+        {
+          "id": "bairros_regioes",
+          "label": "Bairros / regiões de atuação",
+          "tipo": "text",
+          "obrigatorio": false,
+          "placeholder": "ex: Jardins, Itaim Bibi, Vila Nova Conceição",
+          "descricao": "Separados por vírgula"
+        },
+        {
+          "id": "horario_inicio",
+          "label": "Horário de início de atendimento",
+          "tipo": "time",
+          "obrigatorio": true,
+          "default": "08:00"
+        },
+        {
+          "id": "horario_fim",
+          "label": "Horário de fim de atendimento",
+          "tipo": "time",
+          "obrigatorio": true,
+          "default": "19:00"
+        },
+        {
+          "id": "dias_atendimento",
+          "label": "Dias de atendimento",
+          "tipo": "multi_select",
+          "obrigatorio": true,
+          "opcoes": [
+            {"value": "seg", "label": "Segunda"},
+            {"value": "ter", "label": "Terça"},
+            {"value": "qua", "label": "Quarta"},
+            {"value": "qui", "label": "Quinta"},
+            {"value": "sex", "label": "Sexta"},
+            {"value": "sab", "label": "Sábado"},
+            {"value": "dom", "label": "Domingo"}
+          ],
+          "default": ["seg", "ter", "qua", "qui", "sex"]
+        }
+      ]
+    },
+
+    {
+      "id": "consultor",
+      "titulo": "Consultor Virtual",
+      "descricao": "Personalidade e identidade do assistente de IA",
+      "campos": [
+        {
+          "id": "consultor.nome_consultor",
+          "label": "Nome do consultor virtual",
+          "tipo": "text",
+          "obrigatorio": true,
+          "placeholder": "ex: Sofia, Marco, Julia"
+        },
+        {
+          "id": "consultor.genero",
+          "label": "Gênero",
+          "tipo": "select",
+          "obrigatorio": true,
+          "opcoes": [
+            {"value": "feminino",  "label": "Feminino"},
+            {"value": "masculino", "label": "Masculino"},
+            {"value": "neutro",    "label": "Neutro"}
+          ],
+          "default": "feminino"
+        },
+        {
+          "id": "consultor.tom_desejado",
+          "label": "Tom de comunicação",
+          "tipo": "select",
+          "obrigatorio": true,
+          "opcoes": [
+            {"value": "sofisticado",  "label": "Sofisticado — preciso, elegante, sem informalidades"},
+            {"value": "consultivo",   "label": "Consultivo — especialista, didático, focado em soluções"},
+            {"value": "amigavel",     "label": "Amigável — próximo, acessível, descontraído"}
+          ],
+          "default": "sofisticado"
+        },
+        {
+          "id": "consultor.identidade",
+          "label": "Como o consultor se apresenta",
+          "tipo": "select",
+          "obrigatorio": true,
+          "opcoes": [
+            {"value": "membro_equipe", "label": "Membro da equipe — não revela ser IA espontaneamente"},
+            {"value": "ia_declarada",  "label": "Assistente virtual — apresenta-se como IA desde o início"}
+          ],
+          "default": "membro_equipe"
+        },
+        {
+          "id": "consultor.resposta_se_perguntado_ia",
+          "label": "Resposta se o lead perguntar se é IA",
+          "tipo": "textarea",
+          "obrigatorio": true,
+          "placeholder": "ex: Sou um assistente da Alfa Imóveis. Posso ajudá-lo com todas as informações que precisar sobre nosso portfólio.",
+          "descricao": "Obrigatório mesmo que identidade seja membro_equipe"
+        },
+        {
+          "id": "consultor.frases_abertura",
+          "label": "Frases de abertura / saudação inicial",
+          "tipo": "textarea",
+          "obrigatorio": true,
+          "placeholder": "Uma frase por linha",
+          "descricao": "O consultor escolhe uma das frases ao iniciar a conversa. Mínimo 2."
+        },
+        {
+          "id": "consultor.frases_encerramento",
+          "label": "Frases de encerramento",
+          "tipo": "textarea",
+          "obrigatorio": true,
+          "placeholder": "Uma frase por linha",
+          "descricao": "Usadas ao despedir-se do lead. Mínimo 2."
+        },
+        {
+          "id": "consultor.palavras_proibidas",
+          "label": "Palavras proibidas",
+          "tipo": "text",
+          "obrigatorio": false,
+          "placeholder": "ex: barato, promocional, negócio da china",
+          "descricao": "Separadas por vírgula. O consultor nunca usa essas palavras."
+        },
+        {
+          "id": "consultor.palavras_preferidas",
+          "label": "Palavras e termos preferidos da marca",
+          "tipo": "text",
+          "obrigatorio": false,
+          "placeholder": "ex: exclusivo, curadoria, patrimônio, bem-estar",
+          "descricao": "Separadas por vírgula."
+        }
+      ]
+    },
+
+    {
+      "id": "whatsapp",
+      "titulo": "WhatsApp Business",
+      "descricao": "Canal de comunicação com os leads",
+      "campos": [
+        {
+          "id": "whatsapp.numero_whatsapp",
+          "label": "Número do WhatsApp do consultor (com DDI)",
+          "tipo": "phone",
+          "obrigatorio": true,
+          "placeholder": "+5511999999999"
+        },
+        {
+          "id": "whatsapp.bsp_provider",
+          "label": "Provedor BSP (Business Solution Provider)",
+          "tipo": "select",
+          "obrigatorio": true,
+          "opcoes": [
+            {"value": "360dialog", "label": "360dialog"},
+            {"value": "gupshup",   "label": "Gupshup"},
+            {"value": "twilio",    "label": "Twilio"}
+          ],
+          "default": "360dialog"
+        },
+        {
+          "id": "whatsapp.bsp_api_key",
+          "label": "Chave de API do BSP",
+          "tipo": "text",
+          "obrigatorio": true,
+          "descricao": "Fornecida pelo BSP após aprovação do número"
+        },
+        {
+          "id": "whatsapp.bsp_url",
+          "label": "URL base do BSP",
+          "tipo": "url",
+          "obrigatorio": false,
+          "descricao": "Necessário apenas para alguns provedores. Deixe em branco se não souber."
+        }
+      ]
+    },
+
+    {
+      "id": "distribuicao",
+      "titulo": "Distribuição de Leads",
+      "descricao": "Como os leads qualificados são distribuídos entre os corretores",
+      "campos": [
+        {
+          "id": "distribuicao.estrategia",
+          "label": "Estratégia de distribuição",
+          "tipo": "select",
+          "obrigatorio": true,
+          "opcoes": [
+            {"value": "round_robin",       "label": "Round-robin — revezamento sequencial"},
+            {"value": "por_especialidade", "label": "Por especialidade — match de segmento do lead com corretor"},
+            {"value": "por_bairro",        "label": "Por bairro — match de região"},
+            {"value": "manual",            "label": "Manual — gestor decide quem recebe"}
+          ],
+          "default": "por_especialidade"
+        },
+        {
+          "id": "distribuicao.timeout_corretor_minutos",
+          "label": "Tempo de espera por resposta do corretor (minutos)",
+          "tipo": "number",
+          "obrigatorio": true,
+          "default": 15,
+          "validacao": {"min": 1, "max": 1440}
+        },
+        {
+          "id": "distribuicao.acao_sem_resposta_corretor",
+          "label": "Ação se o corretor não responder",
+          "tipo": "select",
+          "obrigatorio": true,
+          "opcoes": [
+            {"value": "notificar_proximo_da_lista", "label": "Notificar próximo da lista"},
+            {"value": "escalar_gerente",            "label": "Escalar para o gerente"},
+            {"value": "agendar_retorno",            "label": "Agendar retorno automático"}
+          ],
+          "default": "notificar_proximo_da_lista"
+        },
+        {
+          "id": "distribuicao.notificar_corretor_score_minimo",
+          "label": "Score mínimo de intenção para notificar corretor imediatamente",
+          "tipo": "number",
+          "obrigatorio": true,
+          "default": 5,
+          "descricao": "Score de 0–20. Leads abaixo desse score só notificam na coleta.",
+          "validacao": {"min": 0, "max": 20}
+        }
+      ]
+    },
+
+    {
+      "id": "qualificacao",
+      "titulo": "Qualificação de Leads",
+      "descricao": "Perguntas e critérios por segmento",
+
+      "subsecoes": [
+        {
+          "id": "qualificacao.vendas",
+          "titulo": "Qualificação — Vendas",
+          "show_if": {"campo": "imobiliaria.segmentos", "contem": "vendas"},
+          "campos": [
+            {
+              "id": "qualificacao.vendas.perguntas_obrigatorias",
+              "label": "Perguntas obrigatórias de qualificação (vendas)",
+              "tipo": "textarea",
+              "obrigatorio": true,
+              "placeholder": "Uma pergunta por linha\nex: Qual o seu orçamento para a compra?\nEx: O imóvel é para uso próprio ou investimento?",
+              "descricao": "O consultor deve obter resposta para todas essas perguntas antes de encaminhar ao corretor."
+            },
+            {
+              "id": "qualificacao.vendas.criterios_lead_quente",
+              "label": "Critérios de lead quente (vendas)",
+              "tipo": "textarea",
+              "obrigatorio": true,
+              "placeholder": "ex: Budget confirmado acima de R$ 1M\nPrazo de compra até 90 dias\nSolicitou visita ou documentação"
+            },
+            {
+              "id": "qualificacao.vendas.criterios_lead_frio",
+              "label": "Critérios de lead frio (vendas)",
+              "tipo": "textarea",
+              "obrigatorio": true,
+              "placeholder": "ex: Sem prazo definido\nAinda não vendeu imóvel atual\nBudget abaixo do ticket mínimo"
+            }
+          ]
+        },
+        {
+          "id": "qualificacao.alugueis",
+          "titulo": "Qualificação — Aluguéis",
+          "show_if": {"campo": "imobiliaria.segmentos", "contem": "alugueis"},
+          "campos": [
+            {
+              "id": "qualificacao.alugueis.perguntas_obrigatorias",
+              "label": "Perguntas obrigatórias de qualificação (aluguéis)",
+              "tipo": "textarea",
+              "obrigatorio": true,
+              "placeholder": "ex: Qual o orçamento mensal para aluguel?\nTem fiador ou prefere seguro-fiança?\nQuantas pessoas vão morar no imóvel?"
+            },
+            {
+              "id": "qualificacao.alugueis.criterios_lead_quente",
+              "label": "Critérios de lead quente (aluguéis)",
+              "tipo": "textarea",
+              "obrigatorio": true
+            },
+            {
+              "id": "qualificacao.alugueis.criterios_lead_frio",
+              "label": "Critérios de lead frio (aluguéis)",
+              "tipo": "textarea",
+              "obrigatorio": true
+            }
+          ]
+        },
+        {
+          "id": "qualificacao.lancamentos",
+          "titulo": "Qualificação — Lançamentos",
+          "show_if": {"campo": "imobiliaria.segmentos", "contem": "lancamentos"},
+          "campos": [
+            {
+              "id": "qualificacao.lancamentos.perguntas_obrigatorias",
+              "label": "Perguntas obrigatórias de qualificação (lançamentos)",
+              "tipo": "textarea",
+              "obrigatorio": true,
+              "placeholder": "ex: Já conhece o empreendimento?\nTem capital para entrada?\nPrecisa de financiamento?"
+            },
+            {
+              "id": "qualificacao.lancamentos.criterios_lead_quente",
+              "label": "Critérios de lead quente (lançamentos)",
+              "tipo": "textarea",
+              "obrigatorio": true
+            },
+            {
+              "id": "qualificacao.lancamentos.criterios_lead_frio",
+              "label": "Critérios de lead frio (lançamentos)",
+              "tipo": "textarea",
+              "obrigatorio": true
+            }
+          ]
+        },
+        {
+          "id": "qualificacao.temporada",
+          "titulo": "Qualificação — Temporada",
+          "show_if": {"campo": "imobiliaria.segmentos", "contem": "temporada"},
+          "campos": [
+            {
+              "id": "qualificacao.temporada.perguntas_obrigatorias",
+              "label": "Perguntas obrigatórias de qualificação (temporada)",
+              "tipo": "textarea",
+              "obrigatorio": true,
+              "placeholder": "ex: Quantas pessoas no grupo?\nData de check-in e check-out?\nPrefere casa ou apartamento?"
+            },
+            {
+              "id": "qualificacao.temporada.criterios_lead_quente",
+              "label": "Critérios de lead quente (temporada)",
+              "tipo": "textarea",
+              "obrigatorio": true
+            },
+            {
+              "id": "qualificacao.temporada.criterios_lead_frio",
+              "label": "Critérios de lead frio (temporada)",
+              "tipo": "textarea",
+              "obrigatorio": true
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "id": "regras",
+      "titulo": "Regras de Negócio",
+      "descricao": "O que o consultor pode ou não fazer nas negociações",
+      "campos": [
+        {
+          "id": "regras.pode_falar_desconto",
+          "label": "O consultor pode mencionar desconto?",
+          "tipo": "boolean",
+          "obrigatorio": true,
+          "default": false
+        },
+        {
+          "id": "regras.desconto_maximo_percent",
+          "label": "Desconto máximo permitido (%)",
+          "tipo": "number",
+          "obrigatorio": true,
+          "show_if": {"campo": "regras.pode_falar_desconto", "igual": true},
+          "validacao": {"min": 0, "max": 100},
+          "placeholder": "ex: 5"
+        },
+        {
+          "id": "regras.parceiros_financiamento",
+          "label": "Parceiros de financiamento",
+          "tipo": "text",
+          "obrigatorio": false,
+          "placeholder": "ex: Itaú, Bradesco, Caixa Econômica Federal",
+          "descricao": "Separados por vírgula"
+        },
+        {
+          "id": "regras.garantias_aceitas_aluguel",
+          "label": "Garantias aceitas no aluguel",
+          "tipo": "multi_select",
+          "obrigatorio": true,
+          "show_if": {"campo": "imobiliaria.segmentos", "contem": "alugueis"},
+          "opcoes": [
+            {"value": "fiador",         "label": "Fiador"},
+            {"value": "seguro_fianca",  "label": "Seguro-fiança"},
+            {"value": "deposito",       "label": "Depósito caução"},
+            {"value": "titulo_cap",     "label": "Título de capitalização"},
+            {"value": "cartao_credito", "label": "Cartão de crédito"}
+          ]
+        },
+        {
+          "id": "regras.regras_adicionais",
+          "label": "Outras regras específicas",
+          "tipo": "textarea",
+          "obrigatorio": false,
+          "placeholder": "ex: Não negociar com leads que não forneceram CPF\nSempre oferecer tour virtual antes da visita presencial"
+        }
+      ]
+    },
+
+    {
+      "id": "crm",
+      "titulo": "CRM (opcional)",
+      "descricao": "Integração com o CRM atual da imobiliária",
+      "campos": [
+        {
+          "id": "crm.crm_nome",
+          "label": "Nome do CRM",
+          "tipo": "text",
+          "obrigatorio": false,
+          "placeholder": "ex: Pipedrive, RD Station, HubSpot, sem CRM"
+        },
+        {
+          "id": "crm.crm_webhook_url",
+          "label": "URL do webhook de integração",
+          "tipo": "url",
+          "obrigatorio": false,
+          "placeholder": "https://hooks.seu-crm.com/leads",
+          "descricao": "O sistema enviará dados do lead para esta URL a cada atualização"
+        },
+        {
+          "id": "crm.crm_api_key",
+          "label": "Chave de API do CRM",
+          "tipo": "text",
+          "obrigatorio": false
+        }
+      ]
+    },
+
+    {
+      "id": "horarios",
+      "titulo": "Horários de Atendimento",
+      "campos": [
+        {
+          "id": "horarios.horario_inicio",
+          "label": "Início do atendimento",
+          "tipo": "time",
+          "obrigatorio": true,
+          "default": "08:00"
+        },
+        {
+          "id": "horarios.horario_fim",
+          "label": "Fim do atendimento",
+          "tipo": "time",
+          "obrigatorio": true,
+          "default": "20:00"
+        },
+        {
+          "id": "horarios.atende_sabado",
+          "label": "Atende aos sábados?",
+          "tipo": "boolean",
+          "obrigatorio": true,
+          "default": true
+        },
+        {
+          "id": "horarios.atende_domingo",
+          "label": "Atende aos domingos?",
+          "tipo": "boolean",
+          "obrigatorio": true,
+          "default": false
+        },
+        {
+          "id": "horarios.feriados_nacionais",
+          "label": "Segue feriados nacionais?",
+          "tipo": "boolean",
+          "obrigatorio": true,
+          "default": true
+        },
+        {
+          "id": "horarios.comportamento_fora_horario",
+          "label": "Comportamento fora do horário comercial",
+          "tipo": "select",
+          "obrigatorio": true,
+          "opcoes": [
+            {"value": "informar_horario_e_registrar_lead", "label": "Informar horário e registrar lead"},
+            {"value": "nao_responder",                     "label": "Não responder"},
+            {"value": "responder_normalmente",             "label": "Responder normalmente 24h"}
+          ],
+          "default": "informar_horario_e_registrar_lead"
+        },
+        {
+          "id": "horarios.mensagem_fora_horario",
+          "label": "Mensagem enviada fora do horário",
+          "tipo": "textarea",
+          "obrigatorio": true,
+          "descricao": "Suporta {horario_inicio}, {horario_fim}, {nome_consultor}"
+        }
+      ]
+    },
+
+    {
+      "id": "escalacao",
+      "titulo": "Escalação para Humano",
+      "descricao": "Quando e como o consultor transfere o lead para um corretor",
+      "campos": [
+        {
+          "id": "escalacao.gatilhos_escalacao",
+          "label": "Gatilhos que disparam escalação imediata",
+          "tipo": "textarea",
+          "obrigatorio": true,
+          "placeholder": "ex: Lead solicita falar com corretor\nLead demonstra insatisfação\nPergunta sobre condições especiais não mapeadas\nScore de intenção acima de 15"
+        },
+        {
+          "id": "escalacao.mensagem_transferencia",
+          "label": "Mensagem ao transferir para o corretor",
+          "tipo": "textarea",
+          "obrigatorio": true,
+          "placeholder": "ex: Vou conectar você com um de nossos especialistas. Em instantes ele entrará em contato."
+        },
+        {
+          "id": "escalacao.canal_alerta_operador",
+          "label": "Canal de alerta para o operador",
+          "tipo": "select",
+          "obrigatorio": true,
+          "opcoes": [
+            {"value": "whatsapp", "label": "WhatsApp"},
+            {"value": "slack",    "label": "Slack"},
+            {"value": "email",    "label": "E-mail"}
+          ],
+          "default": "whatsapp"
+        },
+        {
+          "id": "escalacao.contato_alerta",
+          "label": "Contato para alertas",
+          "tipo": "text",
+          "obrigatorio": true,
+          "placeholder": "+5511999999999 (WhatsApp) | #canal-leads (Slack) | email@empresa.com"
+        },
+        {
+          "id": "escalacao.escalar_apos_n_mensagens_sem_resolucao",
+          "label": "Escalar após N mensagens sem resolução",
+          "tipo": "number",
+          "obrigatorio": true,
+          "default": 5,
+          "validacao": {"min": 1, "max": 50}
+        }
+      ]
+    },
+
+    {
+      "id": "dashboard",
+      "titulo": "Dashboard e Relatórios",
+      "descricao": "Configurações de acesso ao painel de gestão",
+      "campos": [
+        {
+          "id": "dashboard.usuarios_dashboard",
+          "label": "E-mails com acesso ao dashboard",
+          "tipo": "text",
+          "obrigatorio": false,
+          "placeholder": "ex: gestor@alfaimoveis.com.br, sócio@alfaimoveis.com.br",
+          "descricao": "Separados por vírgula"
+        },
+        {
+          "id": "dashboard.relatorio_semanal",
+          "label": "Receber relatório semanal por e-mail?",
+          "tipo": "boolean",
+          "obrigatorio": true,
+          "default": true
+        },
+        {
+          "id": "dashboard.email_relatorio",
+          "label": "E-mail para envio do relatório semanal",
+          "tipo": "email",
+          "obrigatorio": false,
+          "show_if": {"campo": "dashboard.relatorio_semanal", "igual": true}
+        },
+        {
+          "id": "dashboard.metricas_prioritarias",
+          "label": "Métricas prioritárias no dashboard",
+          "tipo": "multi_select",
+          "obrigatorio": false,
+          "opcoes": [
+            {"value": "leads_atendidos",        "label": "Leads atendidos"},
+            {"value": "taxa_qualificacao",       "label": "Taxa de qualificação"},
+            {"value": "score_medio_intencao",    "label": "Score médio de intenção"},
+            {"value": "agendamentos_realizados", "label": "Agendamentos realizados"},
+            {"value": "tempo_medio_resposta",    "label": "Tempo médio de resposta"},
+            {"value": "conversao_visita",        "label": "Conversão lead → visita"},
+            {"value": "leads_por_corretor",      "label": "Leads por corretor"},
+            {"value": "leads_por_segmento",      "label": "Leads por segmento"}
+          ],
+          "default": [
+            "leads_atendidos",
+            "taxa_qualificacao",
+            "score_medio_intencao",
+            "agendamentos_realizados",
+            "tempo_medio_resposta"
+          ]
+        }
+      ]
+    }
+
+  ]
+}

@@ -381,9 +381,11 @@ def _build_evaluator_fn():
 
 
 # ---------------------------------------------------------------------------
-# Validação de onboarding
+# Validação de onboarding — Pydantic (schema completo) + fallback legado
 # ---------------------------------------------------------------------------
 
+# Campos mínimos para compatibilidade com agentes da Fase 1
+# (usados apenas no fallback se onboarding_schema não estiver disponível)
 CAMPOS_OBRIGATORIOS_ONBOARDING = [
     "client_id",
     "nome_imobiliaria",
@@ -397,10 +399,30 @@ CAMPOS_OBRIGATORIOS_ONBOARDING = [
 
 def validar_onboarding(onboarding: dict) -> list[str]:
     """
-    Valida os campos obrigatórios do onboarding.
+    Valida o onboarding usando Pydantic (schema completo).
+    Faz fallback para validação de campos obrigatórios se o schema não estiver disponível.
 
     Retorna lista de erros. Lista vazia = onboarding válido.
+    Também enriquece o dicionário com aliases de compatibilidade (to_legacy_dict).
     """
+    # Tentativa de validação completa via Pydantic
+    try:
+        from onboarding_schema import validar_onboarding_pydantic
+        schema, erros = validar_onboarding_pydantic(onboarding)
+        if erros:
+            return erros
+        # Injeta aliases de compatibilidade no dicionário original
+        # para que os agentes da Fase 1 encontrem os campos esperados
+        if schema is not None:
+            legacy = schema.to_legacy_dict()
+            onboarding.update({k: v for k, v in legacy.items() if k not in onboarding})
+        return []
+    except ImportError:
+        logger.warning(
+            "onboarding_schema.py não encontrado — usando validação de campos obrigatórios (fallback)."
+        )
+
+    # Fallback: validação mínima de campos obrigatórios
     erros = []
     for campo in CAMPOS_OBRIGATORIOS_ONBOARDING:
         if campo not in onboarding or not onboarding[campo]:
