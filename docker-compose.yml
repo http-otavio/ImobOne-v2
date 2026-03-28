@@ -3,30 +3,68 @@
 # Deploy via Docker Swarm (sem docker-compose instalado no VPS):
 #
 #   docker build -t imovel-ai-agents:latest .
-#   docker stack deploy -c docker-compose.yml imovel-ai
+#   docker stack deploy -c docker-compose.yml imob
 #
 # Remover stack:
-#   docker stack rm imovel-ai
+#   docker stack rm imob
 #
 # Logs em tempo real:
-#   docker service logs -f imovel-ai_agents
-#   docker service logs -f imovel-ai_dashboard
+#   docker service logs -f imob_agents
+#   docker service logs -f imob_dashboard
+#   docker service logs -f imob_redis
 #
-# IMPORTANTE: a rede OtavioNet deve existir antes do deploy.
-#   Verificar: docker network ls | grep OtavioNet
-#   Redis acessível em: redis://n8n_n8n_redis:6379 (serviço na mesma rede)
+# Redis próprio do stack — não depende de OtavioNet nem do Redis do n8n.
+# Dentro da rede imob_net, o Redis resolve pelo nome de serviço: redis://redis:6379
 
 version: "3.9"
 
 services:
 
-  # ─── Serviço de agentes ─────────────────────────────────────────────────
+  # ─── Redis próprio do stack ──────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - imob_net
+    volumes:
+      - redis_data:/data
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+        window: 30s
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 384M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Serviço de agentes ─────────────────────────────────────────────────────
   agents:
     image: imovel-ai-agents:latest
     env_file:
       - .env
+    environment:
+      # Sobrescreve qualquer REDIS_URL do .env — dentro do stack o Redis
+      # resolve pelo nome do serviço na rede imob_net.
+      - REDIS_URL=redis://redis:6379
     networks:
-      - OtavioNet
+      - imob_net
     volumes:
       # Diretórios escritos pelo dev_flow em runtime:
       #   agents/clients/{client_id}/consultant.py
@@ -60,7 +98,7 @@ services:
         - |
           import os, redis, sys
           try:
-              r = redis.Redis.from_url(os.environ.get('REDIS_URL', 'redis://n8n_n8n_redis:6379'))
+              r = redis.Redis.from_url(os.environ.get('REDIS_URL', 'redis://redis:6379'))
               r.ping()
               sys.exit(0)
           except Exception as e:
@@ -69,14 +107,14 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 30s
     logging:
       driver: json-file
       options:
         max-size: "50m"
         max-file: "5"
 
-  # ─── Dashboard FastAPI ───────────────────────────────────────────────────
+  # ─── Dashboard FastAPI ───────────────────────────────────────────────────────
   dashboard:
     image: imovel-ai-agents:latest
     command: ["python", "-m", "uvicorn", "dashboard.backend.main:app",
@@ -84,8 +122,10 @@ services:
               "--workers", "2", "--log-level", "info"]
     env_file:
       - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
     networks:
-      - OtavioNet
+      - imob_net
     ports:
       - "8000:8000"
     volumes:
@@ -118,11 +158,14 @@ services:
         max-size: "20m"
         max-file: "3"
 
-# ─── Volumes persistentes ────────────────────────────────────────────────────
+# ─── Volumes persistentes ─────────────────────────────────────────────────────
 # Named volumes gerenciados pelo Docker — sobrevivem a restarts e redeploys.
-# Para inspecionar: docker volume ls | grep imovel-ai
-# Para backup:      docker run --rm -v imovel-ai_pipeline_clients:/data alpine tar czf - /data
+# Para inspecionar: docker volume ls | grep imob
+# Para backup:      docker run --rm -v imob_pipeline_clients:/data alpine tar czf - /data
 volumes:
+  # /data — persistência do Redis (AOF habilitado)
+  redis_data:
+
   # /app/agents/clients — consultant.py gerado pelo dev_flow por cliente
   agents_clients:
 
@@ -133,7 +176,9 @@ volumes:
   # Compartilhado (rw) pelo agents e (ro) pelo dashboard
   pipeline_clients:
 
-# ─── Redes ──────────────────────────────────────────────────────────────────
+# ─── Redes ────────────────────────────────────────────────────────────────────
+# Rede overlay interna ao stack — Redis, agents e dashboard se comunicam
+# por nome de serviço sem exposição externa.
 networks:
-  OtavioNet:
-    external: true
+  imob_net:
+    driver: overlay
