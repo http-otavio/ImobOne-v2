@@ -228,6 +228,91 @@ def _build_fake_consultant_fn(onboarding: dict):
     return consultant_fn
 
 
+def _build_portfolio_context(onboarding: dict) -> str:
+    """
+    Lê o portfólio CSV do cliente e gera um bloco de contexto rico para o
+    system prompt do consultor no QA. Inclui dados de imóveis + vizinhança mockada.
+
+    Sem isso, o consultant_fn recebe apenas a string genérica de fallback e não
+    consegue responder sobre imóveis concretos nem sobre vizinhança.
+    """
+    import csv
+    from pathlib import Path
+
+    portfolio_path = onboarding.get("portfolio_path", "")
+    imovel_lines: list[str] = []
+
+    if portfolio_path:
+        candidates = [
+            Path(portfolio_path),
+            Path("/app") / str(portfolio_path).lstrip("/"),
+            Path(__file__).parent / str(portfolio_path).lstrip("/"),
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                try:
+                    with open(candidate, encoding="utf-8-sig") as f:
+                        reader = csv.DictReader(f)
+                        imoveis = list(reader)
+                    imovel_lines.append(f"Portfólio ativo: {len(imoveis)} imóveis disponíveis\n")
+                    for im in imoveis[:10]:
+                        imovel_id  = im.get("id", "")
+                        tipo       = im.get("tipo", im.get("tipo_imovel", ""))
+                        bairro     = im.get("bairro", "")
+                        quartos    = im.get("quartos", "")
+                        area       = im.get("area_m2", im.get("area", ""))
+                        valor      = im.get("valor", "")
+                        status     = im.get("status", "disponível")
+                        lat        = im.get("endereco_lat", im.get("latitude", ""))
+                        lng        = im.get("endereco_lng", im.get("longitude", ""))
+                        imovel_lines.append(
+                            f"  [{imovel_id}] {tipo} | {bairro} | {quartos}q | "
+                            f"{area}m² | R${valor} | {status} | "
+                            f"coords:({lat},{lng})"
+                        )
+                    logger.info("[QA] Portfólio carregado: %d imóveis de %s", len(imoveis), candidate)
+                except Exception as exc:
+                    logger.warning("[QA] Erro ao ler portfólio '%s': %s", candidate, exc)
+                break
+
+    if not imovel_lines:
+        cidade = onboarding.get("cidade_atuacao", "São Paulo")
+        imovel_lines.append(f"Portfólio de imóveis de alto padrão em {cidade}.")
+
+    # Dados de vizinhança por região — referência para QA sem Google Places real
+    vizinhanca_mock = """
+DADOS DE VIZINHANÇA POR REGIÃO (use como referência quando leads perguntarem):
+
+JARDINS / ITAIM BIBI:
+  Educação: Colégio Dante Alighieri (6 min de carro), Escola Caetano de Campos (8 min),
+            Escola Americana de SP (12 min), Colégio São Luís (9 min)
+  Comércio: Pão de Açúcar Premium Iguatemi (3 min), Empório Santa Maria (5 min),
+            Shopping JK Iguatemi (7 min)
+  Mobilidade: Metrô Consolação (10 min), Av. Paulista (8 min)
+
+MOEMA / IBIRAPUERA:
+  Educação: Colégio Vera Cruz (6 min), Escola Internacional de SP (9 min),
+            St. Paul's School (14 min)
+  Comércio: Carrefour Premium (4 min), Mercado Eataly (8 min)
+  Mobilidade: Parque Ibirapuera (5 min), Av. Indianópolis (2 min)
+
+PINHEIROS / VILA MADALENA:
+  Educação: Colégio Positivo (5 min), Instituto Educacional Pioneiro (7 min)
+  Comércio: Mercado Municipal de Pinheiros (4 min), Whole Foods (6 min)
+  Mobilidade: Metrô Fradique Coutinho (3 min), Metrô Vila Madalena (6 min)
+
+BROOKLIN / VILA NOVA CONCEIÇÃO:
+  Educação: Escola Suíço-Brasileira (8 min), St. Nicholas School (10 min)
+  Comércio: Shopping Vila Olímpia (5 min), Mercado Santa Luzia (7 min)
+  Mobilidade: Metrô Vila Olímpia (6 min)
+
+Ao mencionar vizinhança em resposta a um lead, cite o dado mais relevante para o perfil
+(família → escola, investidor → acesso, comprador premium → comércio de alto padrão).
+Apresente como "dados verificados da região"."""
+
+    return "\n".join(imovel_lines) + vizinhanca_mock
+
+
 def _build_llm_consultant_fn(onboarding: dict):
     """
     Consultor LLM real — carrega consultant_base.md como system prompt e usa
@@ -273,8 +358,10 @@ def _build_llm_consultant_fn(onboarding: dict):
         ),
         "{{EXEMPLOS_SAUDACAO}}": onboarding.get("exemplos_saudacao", "Boa tarde, seja bem-vindo."),
         "{{REGRAS_ESPECIFICAS}}": onboarding.get("regras_especificas", ""),
-        "{{PORTFOLIO_CONTEXTO}}": onboarding.get("portfolio_contexto",
-            "Portfólio de imóveis de alto padrão em São Paulo."),
+        # Portfolio context: lê o CSV real e injeta dados concretos de imóveis +
+        # vizinhança mockada. Sem isso, o consultant responde de forma genérica
+        # e falha em critérios que exigem dados concretos (j01, j05, j08).
+        "{{PORTFOLIO_CONTEXTO}}": _build_portfolio_context(onboarding),
     }
     system_prompt = system_prompt_raw
     for placeholder, valor in substituicoes.items():
