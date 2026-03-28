@@ -12,11 +12,34 @@ O produto final é um **consultor digital de luxo** que atende leads via WhatsAp
 
 ---
 
+## Status do projeto
+
+| Fase | Status | Data |
+|------|--------|------|
+| FASE 1 — Time de 10 agentes | ✅ **COMPLETA** — rodando em produção no VPS | Março 2026 |
+| FASE 2 — Consultor digital de luxo | 🔜 Próxima | — |
+
+**Infraestrutura ativa:**
+- VPS: `76.13.165.64` — Docker Swarm, serviço `imob_agents`
+- Repositório: `https://github.com/http-otavio/ImobOne-v2` (privado)
+- Clone no VPS: `/opt/ImobOne-v2` (deploy via `git pull + docker build + service update`)
+- Instância legada: `/opt/imovel-ai/ImobOne-v2` (manter como backup)
+
+**Pipeline de deploy (VPS):**
+```bash
+cd /opt/ImobOne-v2
+git pull
+docker build -t imovel-ai-agents:latest .
+docker service update --image imovel-ai-agents:latest imob_agents
+```
+
+---
+
 ## Ordem de construção — NÃO INVERTER
 
 ```
-FASE 1: Time de 9 agentes (o sistema que constrói o produto)
-FASE 2: Produto — consultor digital de luxo (o que os agentes entregam)
+FASE 1: Time de 10 agentes (o sistema que constrói o produto)  ← COMPLETA
+FASE 2: Produto — consultor digital de luxo (o que os agentes entregam)  ← PRÓXIMA
 ```
 
 Os agentes constroem, testam e fazem deploy de uma instância do produto para cada novo cliente. O produto nunca é construído manualmente.
@@ -54,7 +77,7 @@ Roda em produção por cliente. É o que o lead final interage via WhatsApp.
 
 ---
 
-## FASE 1: Time de 9 agentes
+## FASE 1: Time de 10 agentes ✅ COMPLETA
 
 ### Agente 1 — Orquestrador master
 - **Função:** visão global do pipeline de setup. Não executa — planeja, delega, consolida e decide deploy.
@@ -293,9 +316,15 @@ Meta de tempo total: < 4 horas de execução dos agentes para setup completo.
 
 ---
 
-## Produto — consultor digital de luxo (FASE 2)
+## Produto — consultor digital de luxo (FASE 2) 🔜 PRÓXIMA
 
 > Esta seção descreve o que os agentes vão construir para cada cliente. Não construir manualmente.
+
+**Pré-requisitos para iniciar a FASE 2:**
+- [ ] Supabase: criar projeto, rodar migrations (schema leads + pgvector)
+- [ ] ElevenLabs: escolher/aprovar voz do primeiro cliente
+- [ ] WhatsApp Business API: credenciais 360dialog ou Gupshup
+- [ ] Primeiro `onboarding.json` de cliente real (ou fictício para smoke test)
 
 ### Identidade
 - Nome configurável por cliente (ex: "Julia", "Marco", "Sofia")
@@ -345,19 +374,27 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 - Nenhum dado de cliente deve vazar para namespace de outro cliente (isolamento por `client_id`)
 - Iteração `> 3` na mesma task = escala para revisão humana, não tenta resolver automaticamente
 
-### Ordem de implementação dentro da FASE 1
+### Ordem de implementação dentro da FASE 1 ✅ CONCLUÍDA
 ```
-1. schema.py + board.py (shared state — destrava tudo)
-2. orchestrator.py (esqueleto com nós mock)
-3. ingestion.py + context.py (dados primeiro)
-4. auditor.py (antes de qualquer agente de execução)
-5. dev_flow.py + dev_persona.py
-6. memory.py
-7. qa_journeys.py + qa_integration.py
-8. monitor.py
-9. setup_pipeline.py (integra tudo)
-10. Teste interno completo com briefing fictício
+1. schema.py + board.py ✅
+2. orchestrator.py ✅
+3. ingestion.py + context.py ✅
+4. auditor.py ✅
+5. dev_flow.py + dev_persona.py ✅
+6. memory.py ✅
+7. qa_journeys.py + qa_integration.py ✅
+8. monitor.py ✅
+9. setup_pipeline.py ✅
+10. Teste interno completo — deploy_ready em 48.3s (com --skip qa_integration) ✅
 ```
+
+### Decisões técnicas tomadas durante a implementação da FASE 1
+- **LLM evaluator:** usa assistant prefill `{"passou":` para forçar JSON válido — elimina falhas de parse
+- **Prompts base:** baked no Docker via `_prompts_build/` (workaround para FUSE filesystem do Cowork)
+- **Redis default:** sempre `127.0.0.1:6379`, nunca `localhost` (IPv6 quebra em Docker com ip6tables ativo)
+- **Docker entry point:** `CMD`, não `ENTRYPOINT` — permite override via `command:` no Docker Swarm stack
+- **Modelos:** orquestrador/auditor = `claude-sonnet-4-6`, agentes simples/evaluator = `claude-haiku-4-5-20251001`
+- **qa_integration skip:** aceitável em deploy com credenciais reais pendentes; gate obrigatório antes de cliente real
 
 ### Testes mínimos antes de avançar de agente
 - Cada agente deve ter ao menos 3 testes unitários antes de ser integrado ao grafo
@@ -389,5 +426,5 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 
 ---
 
-*Última atualização: Março 2026 — removido Telegram, WhatsApp Business API é o único canal.*
+*Última atualização: Março 2026 — Fase 1 completa (10 agentes em produção). Git operacional. Iniciando Fase 2.*
 *Este documento é a fonte da verdade do projeto. Qualquer decisão que conflite com ele deve passar pelo arquiteto auditor antes de ser implementada.*
