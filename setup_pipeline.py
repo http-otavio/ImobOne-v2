@@ -555,7 +555,7 @@ def _build_qa_integration_adapter():
 
     async def fn(client_id: str, onboarding: dict) -> tuple[str, dict]:
         async with httpx.AsyncClient() as http:
-            agent = QAIntegrationAgent(onboarding=onboarding, http_client=http)
+            agent = QAIntegrationAgent(http_client=http)
             return await agent.run(client_id, onboarding)
 
     return fn
