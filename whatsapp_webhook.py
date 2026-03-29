@@ -163,15 +163,36 @@ async def save_history(redis_client, sender: str, history: list[dict]):
     _memory_history[sender] = history
 
 
+# ─── Data atual em português ─────────────────────────────────────────────────
+def _data_hoje_pt() -> str:
+    from datetime import date
+    hoje = date.today()
+    DIAS   = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
+              "sexta-feira", "sábado", "domingo"]
+    MESES  = ["janeiro", "fevereiro", "março", "abril", "maio", "junho",
+              "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+    return f"{DIAS[hoje.weekday()]}, {hoje.day} de {MESES[hoje.month - 1]} de {hoje.year}"
+
+
 # ─── Consultor LLM ───────────────────────────────────────────────────────────
 async def run_consultant(history: list[dict], user_message: str) -> str:
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
     messages = history + [{"role": "user", "content": user_message}]
+
+    # Injeta data real no topo do system prompt — evita datas erradas no agendamento
+    data_hoje = _data_hoje_pt()
+    system = (
+        f"HOJE É: {data_hoje}\n"
+        f"Ao confirmar ou sugerir datas de visita, calcule sempre a partir dessa data. "
+        f"Nunca invente datas. Use o dia da semana + data completa (ex: terça-feira, 31 de março de 2026).\n\n"
+        + SYSTEM_PROMPT
+    )
+
     try:
         response = await client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=system,
             messages=messages,
         )
         return response.content[0].text
