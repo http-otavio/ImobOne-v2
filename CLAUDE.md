@@ -250,6 +250,10 @@ Todo estado do pipeline de setup trafega via Redis. Schema obrigatório de cada 
   /docker
     docker-compose.yml      # Redis + Supabase local + serviços
     Dockerfile              # Imagem do sistema de agentes
+  _prompts_build/           # ⚠️ FONTE DA VERDADE dos prompts — copiado para /app/prompts/base/ no Docker build
+    consultant_base.md      # Prompt base do consultor — editar AQUI, nunca direto no container
+    auditor.md
+    orchestrator.md
   setup_pipeline.py         # Script principal: onboarding → setup → deploy
   main.py                   # Entry point do sistema
   requirements.txt
@@ -385,16 +389,35 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 7. qa_journeys.py + qa_integration.py ✅
 8. monitor.py ✅
 9. setup_pipeline.py ✅
-10. Teste interno completo — deploy_ready em 48.3s (com --skip qa_integration) ✅
+10. Teste interno completo — deploy_ready, QA 90% (com --skip qa_integration) ✅
 ```
 
+**Status de QA (demo_imobiliaria_vendas):**
+- Score: **90% — deploy_ready** (9/10 jornadas aprovadas)
+- j06 (lead às 23h → áudio PTT): falha conhecida, critério de geração de áudio em runtime — não bloqueante enquanto ElevenLabs não estiver integrada via credencial real
+- Tempo médio de pipeline: ~150 segundos (com --skip qa_integration)
+
+**Status das integrações em produção (VPS):**
+| Integração | Status | Observação |
+|-----------|--------|-----------|
+| Anthropic API | ✅ configurada | Claude Sonnet + Haiku ativos |
+| Google Places API | ✅ configurada | Dados reais de vizinhança funcionando |
+| Google Distance Matrix | ✅ configurada | Mesma chave do Places |
+| Supabase pgvector | ✅ configurada | 16+ imóveis indexados no demo |
+| Redis | ✅ rodando | 127.0.0.1:6379 no container |
+| ElevenLabs | ⏳ pendente | Credencial não configurada |
+| WhatsApp BSP (360dialog) | ⏳ pendente | **Único bloqueio para cliente real** |
+
 ### Decisões técnicas tomadas durante a implementação da FASE 1
+- **LLM do consultor:** `claude-sonnet-4-6` — não Haiku. O consultor do produto (QA jornadas + futuro FASE 2) usa Sonnet para qualidade de resposta. Haiku fica restrito ao evaluator e agentes de execução simples.
 - **LLM evaluator:** usa assistant prefill `{"passou":` para forçar JSON válido — elimina falhas de parse
-- **Prompts base:** baked no Docker via `_prompts_build/` (workaround para FUSE filesystem do Cowork)
+- **Prompts base:** baked no Docker via `_prompts_build/` (workaround para FUSE filesystem do Cowork). Fonte da verdade é `_prompts_build/consultant_base.md`, que é copiado para `/app/prompts/base/` no build.
 - **Redis default:** sempre `127.0.0.1:6379`, nunca `localhost` (IPv6 quebra em Docker com ip6tables ativo)
 - **Docker entry point:** `CMD`, não `ENTRYPOINT` — permite override via `command:` no Docker Swarm stack
-- **Modelos:** orquestrador/auditor = `claude-sonnet-4-6`, agentes simples/evaluator = `claude-haiku-4-5-20251001`
+- **Modelos:** orquestrador/auditor/consultor = `claude-sonnet-4-6`, agentes simples/evaluator = `claude-haiku-4-5-20251001`
 - **qa_integration skip:** aceitável em deploy com credenciais reais pendentes; gate obrigatório antes de cliente real
+- **portfolio_path é aninhado:** no `onboarding.json`, o caminho do CSV está em `onboarding["portfolio"]["portfolio_path"]`, não em `onboarding["portfolio_path"]`. O `setup_pipeline.py` lê com fallback para os dois formatos. Nunca remover esse fallback.
+- **Critérios de QA:** devem ser objetivamente verificáveis pelo Haiku evaluator a partir do texto da resposta. Critérios como "não deve inventar X" falham porque o Haiku não tem como verificar a origem dos dados — preferir "deve atribuir fonte X na resposta" ou reduzir severidade para INFORMATIVO.
 
 ### Testes mínimos antes de avançar de agente
 - Cada agente deve ter ao menos 3 testes unitários antes de ser integrado ao grafo
@@ -433,5 +456,5 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 
 ---
 
-*Última atualização: Março 2026 — Fase 1 completa (10 agentes em produção). Git operacional. Iniciando Fase 2.*
+*Última atualização: Março 2026 — Fase 1 completa. QA 90% (deploy_ready). Google APIs configuradas. WhatsApp BSP pendente. Próximo passo: credenciais 360dialog → iniciar Fase 2.*
 *Este documento é a fonte da verdade do projeto. Qualquer decisão que conflite com ele deve passar pelo arquiteto auditor antes de ser implementada.*
