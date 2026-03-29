@@ -269,10 +269,14 @@ def _build_portfolio_context(onboarding: dict) -> str:
                         status     = im.get("status", "disponível")
                         lat        = im.get("endereco_lat", im.get("latitude", ""))
                         lng        = im.get("endereco_lng", im.get("longitude", ""))
+                        lazer      = im.get("lazer", "")
+                        link_fotos = im.get("link_fotos", "")
                         imovel_lines.append(
                             f"  [{imovel_id}] {tipo} | {bairro} | {quartos}q | "
                             f"{area}m² | R${valor} | {status} | "
                             f"coords:({lat},{lng})"
+                            + (f" | lazer: {lazer}" if lazer else "")
+                            + (f" | link: {link_fotos}" if link_fotos else "")
                         )
                     logger.info("[QA] Portfólio carregado: %d imóveis de %s", len(imoveis), candidate)
                 except Exception as exc:
