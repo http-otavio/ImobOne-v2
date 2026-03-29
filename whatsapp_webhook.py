@@ -241,14 +241,44 @@ def dispatch_photos(to: str, imovel_id: str):
     area    = imovel.get("area_m2", "")
     valor   = imovel.get("valor", "")
 
-    # URLs de fotos — usa picsum.photos como placeholder com seed por imóvel
-    imovel_seed = imovel_id.lower()
-    photo_urls = [
-        f"https://picsum.photos/seed/{imovel_seed}a/800/600",
-        f"https://picsum.photos/seed/{imovel_seed}b/800/600",
-        f"https://picsum.photos/seed/{imovel_seed}c/800/600",
-        f"https://picsum.photos/seed/{imovel_seed}d/800/600",
+    # URLs de fotos — imagens reais de apartamentos de alto padrão (Unsplash, uso livre)
+    # Cada imóvel tem 4 fotos fixas e consistentes, temáticas com o tipo e bairro
+    FOTOS_POR_IMOVEL: dict[str, list[str]] = {
+        "AV001": [  # Jardins — apartamento sofisticado, vista urbana
+            "https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=800&q=80",  # sala luxo
+            "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?w=800&q=80",  # sala integrada
+            "https://images.unsplash.com/photo-1560185007-c5ca9d2c014d?w=800&q=80",  # varanda
+            "https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?w=800&q=80",  # cozinha gourmet
+        ],
+        "AV002": [  # Itaim — cobertura duplex, rooftop
+            "https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?w=800&q=80",  # cobertura
+            "https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=800&q=80",  # fachada luxo
+            "https://images.unsplash.com/photo-1600047509807-ba8f99d2cdde?w=800&q=80",  # piscina rooftop
+            "https://images.unsplash.com/photo-1600566753086-00f18fb6b3ea?w=800&q=80",  # sala moderna
+        ],
+        "AV003": [  # Vila Nova Conceição — apartamento espaçoso
+            "https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?w=800&q=80",  # sala moderna
+            "https://images.unsplash.com/photo-1600585154526-990dced4db0d?w=800&q=80",  # quarto master
+            "https://images.unsplash.com/photo-1584622650111-993a426fbf0a?w=800&q=80",  # banheiro spa
+            "https://images.unsplash.com/photo-1556909172-54557c7e4fb7?w=800&q=80",  # cozinha
+        ],
+        "AV005": [  # Moema — reformado, próximo Ibirapuera
+            "https://images.unsplash.com/photo-1600607687644-c7171b42498f?w=800&q=80",  # sala aberta
+            "https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=800&q=80",  # varanda verde
+            "https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=800&q=80",  # sala minimalista
+            "https://images.unsplash.com/photo-1556909212-d5b604d0c90d?w=800&q=80",  # cozinha integrada
+        ],
+    }
+
+    # Fallback para imóveis sem fotos específicas — galeria genérica de alto padrão
+    FOTOS_FALLBACK = [
+        "https://images.unsplash.com/photo-1600448204-e02f11c3d0e2?w=800&q=80",
+        "https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?w=800&q=80",
+        "https://images.unsplash.com/photo-1600566753376-12c8ab7fb75b?w=800&q=80",
+        "https://images.unsplash.com/photo-1600210492493-0946911123ea?w=800&q=80",
     ]
+
+    photo_urls = FOTOS_POR_IMOVEL.get(imovel_id, FOTOS_FALLBACK)
 
     # Legenda da primeira foto
     try:
@@ -347,6 +377,32 @@ async def webhook(request: Request):
     return Response(status_code=200)
 
 
+async def _fotos_ja_enviadas(sender: str, imovel_id: str) -> bool:
+    """Verifica se fotos desse imóvel já foram enviadas para esse lead."""
+    key = f"whatsapp:fotos_enviadas:{sender}"
+    if redis_client:
+        try:
+            return await redis_client.sismember(key, imovel_id)
+        except Exception:
+            pass
+    return imovel_id in _memory_history.get(f"fotos:{sender}", set())
+
+
+async def _marcar_fotos_enviadas(sender: str, imovel_id: str):
+    """Registra que fotos desse imóvel já foram enviadas para esse lead."""
+    key = f"whatsapp:fotos_enviadas:{sender}"
+    if redis_client:
+        try:
+            await redis_client.sadd(key, imovel_id)
+            await redis_client.expire(key, 86400)  # 24h
+            return
+        except Exception:
+            pass
+    if f"fotos:{sender}" not in _memory_history:
+        _memory_history[f"fotos:{sender}"] = set()
+    _memory_history[f"fotos:{sender}"].add(imovel_id)
+
+
 async def _process_and_reply(sender: str, text: str):
     history = await get_history(redis_client, sender)
     reply   = await run_consultant(history, text)
@@ -354,9 +410,19 @@ async def _process_and_reply(sender: str, text: str):
     # ── Detecta tag [FOTOS:ID] e remove do texto ──────────────────────────
     foto_match = re.search(r'\[FOTOS:([A-Z0-9]+)\]', reply)
     imovel_id_foto = foto_match.group(1) if foto_match else None
-    if imovel_id_foto:
+
+    # Remove a tag do texto independentemente de enviar ou não
+    if foto_match:
         reply = re.sub(r'\s*\[FOTOS:[A-Z0-9]+\]\s*', ' ', reply).strip()
-        log.info("Tag [FOTOS:%s] detectada — fotos serão enviadas após o texto", imovel_id_foto)
+
+    # Deduplica: só envia fotos se ainda não enviou para esse imóvel nessa conversa
+    if imovel_id_foto:
+        ja_enviou = await _fotos_ja_enviadas(sender, imovel_id_foto)
+        if ja_enviou:
+            log.info("Fotos de %s já enviadas para %s — ignorando duplicata", imovel_id_foto, sender)
+            imovel_id_foto = None
+        else:
+            log.info("Tag [FOTOS:%s] detectada — fotos serão enviadas após o texto", imovel_id_foto)
 
     # Atualiza histórico (sem a tag)
     history.append({"role": "user",      "content": text})
@@ -369,10 +435,11 @@ async def _process_and_reply(sender: str, text: str):
     await loop.run_in_executor(None, send_whatsapp_message, sender, reply)
     log.info("Resposta enviada para %s: %s", sender, reply[:80])
 
-    # Envia fotos em seguida (se tag presente)
+    # Envia fotos em seguida (apenas uma vez por imóvel por conversa)
     if imovel_id_foto:
-        await asyncio.sleep(1)   # pequena pausa para o texto chegar primeiro
+        await asyncio.sleep(1)
         await loop.run_in_executor(None, dispatch_photos, sender, imovel_id_foto)
+        await _marcar_fotos_enviadas(sender, imovel_id_foto)
 
 
 if __name__ == "__main__":
