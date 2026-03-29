@@ -375,8 +375,9 @@ def _build_llm_consultant_fn(onboarding: dict):
         """Chama Claude Haiku com o system prompt do consultant_base.md."""
         try:
             response = await llm.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-sonnet-4-6",
                 max_tokens=512,
+                temperature=0,  # determinístico para QA consistente
                 system=system_prompt,
                 messages=mensagens,
             )
@@ -487,6 +488,7 @@ def _build_evaluator_fn():
                 msg = await client.messages.create(
                     model="claude-haiku-4-5-20251001",
                     max_tokens=150,  # 80 cortava sugestões longas → string não fechada
+                temperature=0,  # determinístico para resultados consistentes de avaliação
                     system=(
                         'Avalie se o critério foi atendido pela resposta do consultor. '
                         'Complete o JSON: {"passou": <bool>, "sugestao": "<vazio se passou, '
