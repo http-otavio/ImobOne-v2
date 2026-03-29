@@ -55,7 +55,7 @@ Os agentes constroem, testam e fazem deploy de uma instância do produto para ca
 | LLM auxiliar | Claude Haiku | Agentes de execução simples — reduz custo |
 | Memória persistente | Supabase + pgvector | Portfólio, histórico de leads, logs de auditoria |
 | Estado quente / filas | Redis | Shared state board entre agentes, pub/sub, session locks |
-| Canal de comunicação | WhatsApp Business API via 360dialog ou Gupshup | Oficial Meta, zero risco de ban, único canal |
+| Canal de comunicação | WhatsApp Business API via **360dialog** (BSP escolhido) | Oficial Meta, acesso direto sem camada proprietária, zero risco de ban |
 | TTS (voz) | ElevenLabs API | Voz natural configurável por cliente |
 | Dados de vizinhança | Google Places API + Distance Matrix API | Escolas, mercados, trajetos em tempo real |
 | Backend | FastAPI + WebSocket | API REST + alertas em tempo real |
@@ -216,7 +216,7 @@ Todo estado do pipeline de setup trafega via Redis. Schema obrigatório de cada 
     places_api.py           # Google Places API wrapper
     distance_api.py         # Distance Matrix API wrapper
     tts.py                  # ElevenLabs wrapper
-    whatsapp.py             # WhatsApp Business API wrapper (360dialog/Gupshup) — único canal
+    whatsapp.py             # WhatsApp Business API wrapper (360dialog) — único canal
     crm_webhook.py          # Webhook genérico para CRM do cliente
     embeddings.py           # Geração de embeddings (text-embedding-3-small)
   /state
@@ -323,7 +323,7 @@ Meta de tempo total: < 4 horas de execução dos agentes para setup completo.
 **Pré-requisitos para iniciar a FASE 2:**
 - [ ] Supabase: criar projeto, rodar migrations (schema leads + pgvector)
 - [ ] ElevenLabs: escolher/aprovar voz do primeiro cliente
-- [ ] WhatsApp Business API: credenciais 360dialog ou Gupshup
+- [ ] WhatsApp Business API: credenciais 360dialog (BSP escolhido — ver decisão abaixo)
 - [ ] Primeiro `onboarding.json` de cliente real (ou fictício para smoke test)
 
 ### Identidade
@@ -413,6 +413,13 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 | ElevenLabs sobre OpenAI TTS | Qualidade de voz superior, voz por cliente configurável | Fácil |
 | WhatsApp Business API oficial (único canal) | Zero risco de ban, requisito inegociável para produto pago e premium | N/A |
 | Evolution API | **DESCARTADO** — alto risco de ban, inaceitável para produto pago | — |
+| 360dialog sobre Gupshup | Acesso direto à API Meta sem camada proprietária; zero lock-in de BSP; gestão multi-conta via Partner API (1 subaccount por cliente); sem markup em mensagens | Fácil |
+
+**Modelo de contratação 360dialog:**
+- Até ~6 clientes: plano Regular direto — €49/mês por número (~R$ 290)
+- A partir de 7 clientes: Partner Growth — €500/mês para até 20 clientes (mais barato por cliente)
+- Mais taxas Meta por conversa (~$0,083 USD/conversa business-initiated, Brasil)
+- Gupshup descartado: features de chatbot builder são redundantes com o orquestrador LangGraph próprio
 
 ---
 
