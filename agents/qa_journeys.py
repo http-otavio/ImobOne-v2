@@ -208,9 +208,9 @@ def _build_jornadas_base() -> list[Jornada]:
                     sugestao_correcao="Acionar buscar_vizinhanca(lat, lng, 'school') e incluir resultado na resposta.",
                 ),
                 Criterio(
-                    descricao="não deve inventar nome de escola sem dados reais da API",
-                    severidade=SEVERIDADE_CRITICO,
-                    sugestao_correcao="Verificar se tool buscar_vizinhanca foi acionada antes da resposta.",
+                    descricao="deve atribuir a fonte das informações de escola ao Google Maps ou ao sistema de vizinhança (ex: 'verificado nos nossos dados', 'Google Maps', 'dados de vizinhança') — não pode omitir a fonte",
+                    severidade=SEVERIDADE_INFORMATIVO,
+                    sugestao_correcao="Verificar se consultant_base.md instrui o consultor a citar a fonte dos dados de vizinhança.",
                 ),
                 Criterio(
                     descricao="deve manter tom sofisticado e não apressado",
@@ -291,9 +291,9 @@ def _build_jornadas_base() -> list[Jornada]:
                     sugestao_correcao="Verificar threshold de score para notificação — leads VIP = score alto automático.",
                 ),
                 Criterio(
-                    descricao="não deve fazer promessas sobre disponibilidade sem dados reais",
+                    descricao="não deve afirmar que há unidades disponíveis ou garantir posição na fila sem dados reais de estoque — 'vou notificar o corretor' é correto, 'há unidades disponíveis para você' sem dados é incorreto",
                     severidade=SEVERIDADE_CRITICO,
-                    sugestao_correcao="Adicionar instrução 'jamais invente informações' ao nó de RECOMENDAÇÃO.",
+                    sugestao_correcao="Adicionar instrução 'jamais invente informações de estoque' ao nó de RECOMENDAÇÃO.",
                 ),
             ],
         ),

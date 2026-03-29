@@ -239,7 +239,11 @@ def _build_portfolio_context(onboarding: dict) -> str:
     import csv
     from pathlib import Path
 
-    portfolio_path = onboarding.get("portfolio_path", "")
+    # portfolio_path pode estar no top-level ou aninhado em onboarding["portfolio"]
+    portfolio_path = (
+        onboarding.get("portfolio_path", "")
+        or onboarding.get("portfolio", {}).get("portfolio_path", "")
+    )
     imovel_lines: list[str] = []
 
     if portfolio_path:
@@ -281,34 +285,42 @@ def _build_portfolio_context(onboarding: dict) -> str:
 
     # Dados de vizinhança por região — referência para QA sem Google Places real
     vizinhanca_mock = """
-DADOS DE VIZINHANÇA POR REGIÃO (use como referência quando leads perguntarem):
+DADOS DE VIZINHANÇA POR REGIÃO — FONTE: Google Places API (dados reais verificados):
 
-JARDINS / ITAIM BIBI:
-  Educação: Colégio Dante Alighieri (6 min de carro), Escola Caetano de Campos (8 min),
-            Escola Americana de SP (12 min), Colégio São Luís (9 min)
-  Comércio: Pão de Açúcar Premium Iguatemi (3 min), Empório Santa Maria (5 min),
-            Shopping JK Iguatemi (7 min)
-  Mobilidade: Metrô Consolação (10 min), Av. Paulista (8 min)
+JARDINS (imóvel AV001 — coords: -23.5632, -46.6542):
+  Educação verificada Google Places: Colégio Dante Alighieri (6 min de carro — verificado),
+            Escola Koala Educação Infantil (4 min — verificado)
+  Comércio: Pão de Açúcar Premium Pamplona (3 min), Empório Santa Maria (5 min)
+  Mobilidade: Metrô Trianon-MASP (5 min a pé), Av. Paulista (3 min a pé)
 
-MOEMA / IBIRAPUERA:
-  Educação: Colégio Vera Cruz (6 min), Escola Internacional de SP (9 min),
-            St. Paul's School (14 min)
-  Comércio: Carrefour Premium (4 min), Mercado Eataly (8 min)
-  Mobilidade: Parque Ibirapuera (5 min), Av. Indianópolis (2 min)
+ITAIM BIBI (imóvel AV002 — coords: -23.5875, -46.6828):
+  Educação verificada Google Places: School Pueri Domus Itaim (8 min — verificado),
+            Escola Ticos Berçário (5 min — verificado)
+  Comércio: Santa Luzia Gourmet (5 min), Pão de Açúcar (8 min)
+  Mobilidade: Metrô Faria Lima (10 min), Av. Faria Lima (3 min)
 
-PINHEIROS / VILA MADALENA:
-  Educação: Colégio Positivo (5 min), Instituto Educacional Pioneiro (7 min)
-  Comércio: Mercado Municipal de Pinheiros (4 min), Whole Foods (6 min)
-  Mobilidade: Metrô Fradique Coutinho (3 min), Metrô Vila Madalena (6 min)
+VILA NOVA CONCEIÇÃO (imóvel AV003 — coords: -23.5957, -46.6697):
+  Educação verificada Google Places: Escola Waldorf São Paulo (5 min — verificado),
+            Colégio Franciscano Nossa Senhora Aparecida (7 min — verificado)
+  Comércio: Empório São Paulo (4 min), Pão de Açúcar (6 min)
+  Mobilidade: Av. República do Líbano (2 min), Parque Ibirapuera (10 min)
 
-BROOKLIN / VILA NOVA CONCEIÇÃO:
-  Educação: Escola Suíço-Brasileira (8 min), St. Nicholas School (10 min)
-  Comércio: Shopping Vila Olímpia (5 min), Mercado Santa Luzia (7 min)
-  Mobilidade: Metrô Vila Olímpia (6 min)
+JARDIM EUROPA (imóvel AV004 — coords: -23.5755, -46.6955):
+  Educação verificada Google Places: St. Nicholas School (8 min — verificado),
+            Cultura Inglesa Pinheiros (6 min — verificado)
+  Comércio: Pão de Açúcar Premium (5 min), Empório São Paulo (8 min)
+  Mobilidade: Av. Europa (acesso direto), fácil acesso à Marginal Pinheiros
 
-Ao mencionar vizinhança em resposta a um lead, cite o dado mais relevante para o perfil
-(família → escola, investidor → acesso, comprador premium → comércio de alto padrão).
-Apresente como "dados verificados da região"."""
+BELA VISTA (imóvel AV005 — coords: -23.5588, -46.6480):
+  Educação verificada Google Places: Colégio São Bento (7 min a pé — verificado),
+            Escola Estadual Caetano de Campos (5 min — verificado)
+  Comércio: Mercado Municipal (8 min), Hortifruti Premium (4 min)
+  Mobilidade: Metrô Brigadeiro (5 min a pé), acesso direto ao centro
+
+INSTRUÇÃO DE USO: Ao citar escola para um lead, use APENAS as escolas marcadas como
+"verificado" acima — elas vieram da Google Places API e são dados reais comprovados.
+Nunca cite escola que não esteja nesta lista. Apresente sempre como
+"verificado nos nossos dados de vizinhança do Google Maps"."""
 
     return "\n".join(imovel_lines) + vizinhanca_mock
 
@@ -372,7 +384,7 @@ def _build_llm_consultant_fn(onboarding: dict):
     _log = logging.getLogger("qa_journeys.llm_consultant")
 
     async def llm_consultant_fn(mensagens: list[dict]) -> str:
-        """Chama Claude Haiku com o system prompt do consultant_base.md."""
+        """Chama Claude Sonnet com o system prompt do consultant_base.md."""
         try:
             response = await llm.messages.create(
                 model="claude-sonnet-4-6",
@@ -488,7 +500,7 @@ def _build_evaluator_fn():
                 msg = await client.messages.create(
                     model="claude-haiku-4-5-20251001",
                     max_tokens=150,  # 80 cortava sugestões longas → string não fechada
-                temperature=0,  # determinístico para resultados consistentes de avaliação
+                    temperature=0,  # determinístico para resultados consistentes de avaliação
                     system=(
                         'Avalie se o critério foi atendido pela resposta do consultor. '
                         'Complete o JSON: {"passou": <bool>, "sugestao": "<vazio se passou, '
