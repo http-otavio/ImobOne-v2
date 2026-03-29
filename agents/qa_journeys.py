@@ -641,11 +641,25 @@ class QAJourneysAgent:
                 evaluator_fn=self._evaluator_fn,
             )
             resultados.append(resultado)
-            logger.debug(
+            status_str = "APROVADA" if resultado.aprovada else "REPROVADA"
+            logger.info(
                 "[qa_journeys] Jornada '%s': %s",
                 jornada.id,
-                "APROVADA" if resultado.aprovada else "REPROVADA",
+                status_str,
             )
+            if not resultado.aprovada:
+                logger.warning(
+                    "[qa_journeys] RESPOSTA CONSULTOR para '%s':\n%s",
+                    jornada.id,
+                    resultado.resposta_consultor[:800],
+                )
+                for c in resultado.criterios:
+                    if c.severidade in (SEVERIDADE_CRITICO, SEVERIDADE_IMPORTANTE) and not c.passou:
+                        logger.warning(
+                            "[qa_journeys]   ✗ [%s] %s",
+                            c.severidade,
+                            c.descricao,
+                        )
 
         metricas = _calcular_metricas(resultados)
 
