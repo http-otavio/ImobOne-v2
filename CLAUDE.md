@@ -17,13 +17,16 @@ O produto final é um **consultor digital de luxo** que atende leads via WhatsAp
 | Fase | Status | Data |
 |------|--------|------|
 | FASE 1 — Time de 10 agentes | ✅ **COMPLETA** — rodando em produção no VPS | Março 2026 |
-| FASE 2 — Consultor digital de luxo | 🔜 Próxima | — |
+| FASE 2 — Consultor digital de luxo | 🟡 **EM ANDAMENTO** — infra base pronta, demo rodando | Março 2026 |
 
 **Infraestrutura ativa:**
 - VPS: `76.13.165.64` — Docker Swarm, serviço `imob_agents`
 - Repositório: `https://github.com/http-otavio/ImobOne-v2` (privado)
 - Clone no VPS: `/opt/ImobOne-v2` (deploy via `git pull + docker build + service update`)
 - Instância legada: `/opt/imovel-ai/ImobOne-v2` (manter como backup)
+- Webhook demo: `/opt/whatsapp_webhook.py` — systemd `whatsapp-webhook.service` — porta 8001
+- Supabase: projeto `imobonev2` (id: `ksqtyjucvldlvuzqmnjh`) — sa-east-1 — pgvector ativo
+- Evolution API (demo): instância `devlabz` em `https://api.otaviolabs.com`
 
 **Pipeline de deploy (VPS):**
 ```bash
@@ -325,10 +328,10 @@ Meta de tempo total: < 4 horas de execução dos agentes para setup completo.
 > Esta seção descreve o que os agentes vão construir para cada cliente. Não construir manualmente.
 
 **Pré-requisitos para iniciar a FASE 2:**
-- [ ] Supabase: criar projeto, rodar migrations (schema leads + pgvector)
-- [ ] ElevenLabs: escolher/aprovar voz do primeiro cliente
-- [ ] WhatsApp Business API: credenciais 360dialog (BSP escolhido — ver decisão abaixo)
-- [ ] Primeiro `onboarding.json` de cliente real (ou fictício para smoke test)
+- [x] Supabase: criar projeto, rodar migrations (schema leads + pgvector) ✅
+- [x] ElevenLabs: integrado com voz Sarah multilingual — Yasmin (BR nativo) requer Starter $5/mês ✅
+- [ ] WhatsApp Business API: credenciais 360dialog (BSP escolhido — ver decisão abaixo) ⏳ **BLOQUEIO**
+- [x] Primeiro `onboarding.json` de cliente real (demo_imobiliaria_vendas) ✅
 
 ### Identidade
 - Nome configurável por cliente (ex: "Julia", "Marco", "Sofia")
@@ -403,10 +406,21 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 | Anthropic API | ✅ configurada | Claude Sonnet + Haiku ativos |
 | Google Places API | ✅ configurada | Dados reais de vizinhança funcionando |
 | Google Distance Matrix | ✅ configurada | Mesma chave do Places |
-| Supabase pgvector | ✅ configurada | 16+ imóveis indexados no demo |
-| Redis | ✅ rodando | 127.0.0.1:6379 no container |
-| ElevenLabs | ⏳ pendente | Credencial não configurada |
-| WhatsApp BSP (360dialog) | ⏳ pendente | **Único bloqueio para cliente real** |
+| Supabase pgvector | ✅ configurada | 18 imóveis indexados no demo; leads + conversas persistindo |
+| Redis | ✅ rodando | 127.0.0.1:6379 — hot storage + locks por sender |
+| OpenAI Whisper | ✅ configurada | Transcrição de áudio PTT recebido |
+| ElevenLabs TTS | ✅ configurada | Geração de áudio PTT — voz Sarah (multilingual). Voz Yasmin (BR nativo) requer plano Starter ($5/mês) |
+| Evolution API (demo) | ✅ ativa | Instância `devlabz` — apenas para demo, não usar em produção |
+| WhatsApp BSP (360dialog) | ⏳ pendente | **Bloqueio para cliente real** — substituir Evolution API |
+
+**Webhook demo (`whatsapp_webhook.py`) — capacidades ativas:**
+- Recebe texto, áudio PTT (transcreve via Whisper), imagem (descreve via Claude Vision), documento
+- Responde em texto com Sofia (claude-sonnet-4-6)
+- Envia fotos do imóvel via tag `[FOTOS:ID]` com dedup por conversa
+- Gera e envia áudio PTT de resposta via tag `[AUDIO]` + ElevenLabs
+- Persiste leads + histórico de conversas no Supabase em tempo real
+- Lock por sender — sem race condition em mensagens simultâneas
+- Data real injetada no system prompt por chamada — agendamentos corretos
 
 ### Decisões técnicas tomadas durante a implementação da FASE 1
 - **LLM do consultor:** `claude-sonnet-4-6` — não Haiku. O consultor do produto (QA jornadas + futuro FASE 2) usa Sonnet para qualidade de resposta. Haiku fica restrito ao evaluator e agentes de execução simples.
@@ -456,5 +470,5 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 
 ---
 
-*Última atualização: Março 2026 — Fase 1 completa. QA 90% (deploy_ready). Google APIs configuradas. WhatsApp BSP pendente. Próximo passo: credenciais 360dialog → iniciar Fase 2.*
+*Última atualização: Março 2026 — Fase 2 em andamento. Demo ao vivo com Sofia via Evolution API. Supabase ativo (leads + conversas + pgvector). ElevenLabs TTS ativo (voz Sarah multilingual; Yasmin BR requer upgrade Starter). OpenAI Whisper ativo para transcrição de áudio recebido. Próximo passo: 360dialog → primeiro cliente real.*
 *Este documento é a fonte da verdade do projeto. Qualquer decisão que conflite com ele deve passar pelo arquiteto auditor antes de ser implementada.*
