@@ -418,36 +418,93 @@ async def _should_notify_corretor(sender: str, score: int) -> bool:
     return f"notified:{sender}" not in _memory_history
 
 
+async def _gerar_resumo_estrategico(history: list[dict], lead_name: str | None) -> str:
+    """
+    Usa Claude Haiku para gerar um resumo estratégico da conversa para o corretor.
+    Foco em: perfil do lead, intenção real, objeções, próximo passo.
+    """
+    if not history:
+        return "Conversa ainda sem histórico disponível."
+
+    # Monta transcrição compacta para o Haiku
+    linhas = []
+    for msg in history[-20:]:  # últimas 20 mensagens — suficiente para contexto
+        role_label = "Lead" if msg["role"] == "user" else "Sofia"
+        content = msg["content"][:300]  # trunca mensagens muito longas
+        linhas.append(f"{role_label}: {content}")
+    transcricao = "\n".join(linhas)
+
+    nome_ctx = f"O lead se identificou como {lead_name}." if lead_name else "O lead não se identificou pelo nome."
+
+    prompt = f"""Você é um analista de CRM especializado em imóveis de alto padrão.
+Analise a conversa abaixo entre Sofia (consultora IA) e um lead no WhatsApp.
+{nome_ctx}
+
+CONVERSA:
+{transcricao}
+
+Gere um briefing estratégico CONCISO para o corretor humano, no seguinte formato exato:
+
+*Perfil:* [comprador / investidor / locatário / indefinido] — [uma frase sobre o perfil]
+*Busca:* [tipo de imóvel, bairro preferido, tamanho, outros requisitos mencionados]
+*Budget:* [valor mencionado ou "não informado"]
+*Prazo:* [urgência percebida: imediato / 30-60 dias / sem prazo / não informado]
+*Sinais quentes:* [2-3 sinais de intenção real que apareceram na conversa]
+*Objeções / dúvidas:* [principais resistências ou perguntas não respondidas]
+*Próximo passo:* [ação concreta recomendada para o corretor — específica e direta]
+
+Seja direto. Máximo 10 linhas. Sem introdução ou conclusão."""
+
+    try:
+        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        resumo = response.content[0].text.strip()
+        log.info("Resumo estratégico gerado para corretor (%d chars)", len(resumo))
+        return resumo
+    except Exception as e:
+        log.error("Falha ao gerar resumo estratégico: %s", e)
+        return "Não foi possível gerar o resumo automático. Verifique o histórico da conversa."
+
+
 async def _notify_corretor(
     sender: str,
     score: int,
-    user_message: str,
+    history: list[dict],
     lead_name: str | None,
-    history_len: int = 0,
 ):
     """
     Envia alerta ao corretor via WhatsApp quando lead atinge threshold de intenção.
+    Inclui resumo estratégico da conversa gerado por IA (Claude Haiku).
     """
     if not CORRETOR_NUMBER:
         return
 
     nome_display = lead_name or "não identificado"
-    snippet = user_message[:200].replace("\n", " ")
+    n_trocas = len([m for m in history if m["role"] == "user"])
+
+    # Gera resumo estratégico antes de enviar
+    resumo = await _gerar_resumo_estrategico(history, lead_name)
 
     msg = (
         f"🔔 *Lead Quente — Sofia IA*\n\n"
-        f"📱 Número: {sender}\n"
-        f"👤 Nome: {nome_display}\n"
-        f"⚡ Score de intenção: *{score}* (threshold: {CORRETOR_SCORE_THRESHOLD})\n"
-        f"💬 Mensagens na conversa: {history_len // 2}\n\n"
-        f"*Última mensagem do lead:*\n"
-        f"_{snippet}_\n\n"
-        f"Acesse o painel para ver o histórico completo."
+        f"📱 *Número:* {sender}\n"
+        f"👤 *Nome:* {nome_display}\n"
+        f"⚡ *Score de intenção:* {score} pts\n"
+        f"💬 *Mensagens trocadas:* {n_trocas}\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"*BRIEFING ESTRATÉGICO*\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"{resumo}\n\n"
+        f"_Gerado automaticamente por Sofia IA_"
     )
 
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, send_whatsapp_message, CORRETOR_NUMBER, msg)
-    log.info("Corretor notificado sobre lead %s (score=%d)", sender, score)
+    log.info("Corretor notificado sobre lead %s (score=%d, resumo gerado)", sender, score)
 
     # Marca cooldown no Redis
     cooldown_key = f"whatsapp:corretor_notified:{sender}"
@@ -1043,8 +1100,13 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
         # ── Notifica corretor se lead atingiu threshold ───────────────────────
         should_notify = await _should_notify_corretor(sender, new_score)
         if should_notify:
+            # Passa histórico completo (já inclui a mensagem atual) para o resumo
+            full_history = history + [
+                {"role": "user",      "content": user_message},
+                {"role": "assistant", "content": reply_clean},
+            ]
             asyncio.create_task(_notify_corretor(
-                sender, new_score, user_message, lead_name, len(history)
+                sender, new_score, full_history, lead_name
             ))
             asyncio.create_task(_supabase_update_score(
                 sender, new_score, score_breakdown,
