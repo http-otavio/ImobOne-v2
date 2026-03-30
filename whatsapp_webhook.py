@@ -1454,6 +1454,97 @@ def _run_new_property_engine(imovel: dict, client_id: str, instance: str, ctx: d
         log.error("Erro no new-property engine: %s", e)
 
 
+# ─── Setup client endpoint ────────────────────────────────────────────────────
+SETUP_SECRET = os.getenv("SETUP_SECRET", "imob-setup-2026")
+
+
+@app.post("/setup-client")
+async def setup_client(request: Request):
+    """
+    Recebe o JSON do formulário de onboarding e dispara o pipeline de agentes.
+
+    Fluxo:
+      1. Valida o header X-Setup-Secret
+      2. Salva onboarding.json em clients/{client_id}/
+      3. Dispara setup_pipeline.py em background
+      4. Retorna job_id para acompanhamento
+
+    Chamado automaticamente pelo onboarding_form.html ao clicar em "Iniciar configuração".
+    """
+    # Autenticação simples por header
+    secret = request.headers.get("X-Setup-Secret", "")
+    if secret != SETUP_SECRET:
+        log.warning("setup-client: token inválido")
+        return Response(status_code=403, content="Acesso não autorizado")
+
+    try:
+        data = await request.json()
+    except Exception:
+        return Response(status_code=400, content="JSON inválido")
+
+    client_id = data.get("client_id", "").strip()
+    if not client_id:
+        return Response(status_code=400, content="client_id obrigatório")
+
+    log.info("Setup iniciado para cliente '%s'", client_id)
+
+    # Salva onboarding.json
+    import uuid
+    job_id = str(uuid.uuid4())[:8]
+    try:
+        base_dir = Path(__file__).parent
+        client_dir = base_dir / "clients" / client_id
+        client_dir.mkdir(parents=True, exist_ok=True)
+        onboarding_path = client_dir / "onboarding.json"
+        onboarding_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+        log.info("onboarding.json salvo em %s", onboarding_path)
+    except Exception as e:
+        log.error("Erro ao salvar onboarding.json: %s", e)
+        return Response(status_code=500, content=f"Erro ao salvar configuração: {e}")
+
+    # Dispara setup_pipeline em background (não bloqueia response)
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _run_setup_pipeline, client_id, str(onboarding_path), job_id)
+
+    return {
+        "status":    "accepted",
+        "client_id": client_id,
+        "job_id":    job_id,
+        "message":   "Configuração iniciada. Você receberá uma confirmação em breve.",
+    }
+
+
+IMOB_DIR = os.getenv("IMOB_DIR", "/opt/ImobOne-v2")
+
+
+def _run_setup_pipeline(client_id: str, onboarding_path: str, job_id: str):
+    """Executa setup_pipeline.py para o novo cliente em thread separada."""
+    import subprocess
+    try:
+        log.info("[job:%s] Iniciando setup_pipeline para '%s'", job_id, client_id)
+        venv_python = "/opt/webhook-venv/bin/python3"
+        pipeline_script = str(Path(IMOB_DIR) / "setup_pipeline.py")
+
+        result = subprocess.run(
+            [venv_python, pipeline_script, "--client", client_id, "--skip", "qa_integration"],
+            capture_output=True,
+            text=True,
+            timeout=900,  # 15 minutos máximo
+            cwd=IMOB_DIR,
+        )
+        if result.returncode == 0:
+            log.info("[job:%s] Setup concluído com sucesso para '%s'", job_id, client_id)
+        else:
+            log.error("[job:%s] Setup falhou para '%s':\n%s", job_id, client_id, result.stderr[-2000:])
+    except subprocess.TimeoutExpired:
+        log.error("[job:%s] Setup timeout para '%s'", job_id, client_id)
+    except Exception as e:
+        log.error("[job:%s] Erro no setup_pipeline: %s", job_id, e)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
