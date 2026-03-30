@@ -306,6 +306,53 @@ _VISIT_CONFIRMATION_RE = re.compile(
 )
 
 
+# Sinais de descarte — lead dizendo que não vai comprar / não é o momento
+_DISCARD_SIGNALS: list[tuple[str, str]] = [
+    # (regex, motivo)
+    (r'\bnão\s+é\s+o\s+momento\b|\bainda\s+não\s+é\s+hora\b|\bnão\s+estou\s+pronto\b', 'nao_e_momento'),
+    (r'\bjá\s+comprei\b|\bjá\s+fechei\b|\bjá\s+assinei\b|\bencontrei\s+(?:um|uma)\s+(?:apê|apto|apartamento|casa|imóvel)\b', 'ja_comprou'),
+    (r'\bnão\s+tenho\s+(?:budget|dinheiro|condição|verba)\b|\bfora\s+do\s+(?:meu\s+)?budget\b|\bnão\s+cabe\s+no\b', 'sem_budget'),
+    (r'\bdesisti\b|\bnão\s+vou\s+(?:mais\s+)?comprar\b|\bnão\s+quero\s+mais\b|\bcancelar?\b', 'desistencia'),
+    (r'\bvou\s+esperar\b|\bpor\s+enquanto\s+não\b|\bnão\s+por\s+agora\b|\bainda\s+não\b', 'nao_e_momento'),
+]
+_DISCARD_RE = [(re.compile(pat, re.IGNORECASE), motivo) for pat, motivo in _DISCARD_SIGNALS]
+
+
+def _detect_discard_signal(user_message: str) -> str | None:
+    """
+    Detecta se a mensagem do lead contém sinal de descarte.
+    Retorna o motivo ou None.
+    """
+    for pattern, motivo in _DISCARD_RE:
+        if pattern.search(user_message):
+            return motivo
+    return None
+
+
+async def _supabase_mark_descartado(sender: str, motivo: str):
+    """Marca lead como descartado no Supabase para iniciar nutrição de longo prazo."""
+    sb = _get_supabase()
+    if not sb:
+        return
+    try:
+        from datetime import datetime, timezone
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: (
+            sb.table("leads")
+              .upsert({
+                  "client_id":       CLIENT_ID,
+                  "lead_phone":      sender,
+                  "descartado":      True,
+                  "descartado_em":   datetime.now(timezone.utc).isoformat(),
+                  "motivo_descarte": motivo,
+              }, on_conflict="client_id,lead_phone")
+              .execute()
+        ))
+        log.info("Lead %s marcado como descartado (%s)", sender, motivo)
+    except Exception as e:
+        log.warning("Falha ao marcar lead como descartado: %s", e)
+
+
 def _detect_visit_confirmation(reply: str) -> bool:
     """Retorna True se a resposta da Sofia indica que uma visita foi confirmada."""
     return bool(_VISIT_CONFIRMATION_RE.search(reply))
@@ -1131,6 +1178,11 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
         await save_history(redis_client, sender, history)
 
         loop = asyncio.get_event_loop()
+
+        # ── Detecta sinal de descarte na mensagem do lead ────────────────────
+        motivo_descarte = _detect_discard_signal(user_message)
+        if motivo_descarte:
+            asyncio.create_task(_supabase_mark_descartado(sender, motivo_descarte))
 
         # ── Detecta confirmação de visita na resposta da Sofia ───────────────
         if _detect_visit_confirmation(reply_clean):

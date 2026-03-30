@@ -66,12 +66,15 @@ SEND_HOUR_END   = int(os.getenv("FOLLOWUP_HOUR_END", "21"))    # 21:00
 
 # TTLs de cada cenário (em horas) — evita reenvio no mesmo período
 TTL = {
-    "silence_24h":  72,    # não reenviar por 3 dias
-    "silence_48h":  120,   # não reenviar por 5 dias
-    "silence_7d":   720,   # não reenviar por 30 dias
-    "post_visit":   168,   # não reenviar por 7 dias
-    "new_property": 99999, # nunca reenviar o mesmo imóvel para o mesmo lead
+    "silence_24h":      72,    # não reenviar por 3 dias
+    "silence_48h":      120,   # não reenviar por 5 dias
+    "silence_7d":       720,   # não reenviar por 30 dias
+    "post_visit":       168,   # não reenviar por 7 dias
+    "new_property":     99999, # nunca reenviar o mesmo imóvel para o mesmo lead
     "crm_reactivation": 168,
+    "discard_30d":      99999, # enviado uma vez, nunca repetir
+    "discard_60d":      99999,
+    "discard_90d":      99999,
 }
 
 # Thresholds de silêncio
@@ -238,6 +241,32 @@ def record_sent(lead_phone: str, event_type: str, message: str, imovel_id: Optio
 
 
 # ─── Geração de mensagem via Haiku ───────────────────────────────────────────
+_DISCARD_PROMPTS = {
+    "discard_30d": (
+        "Este lead disse que não era o momento ou que ia esperar, há cerca de 30 dias.\n"
+        "Escreva UMA mensagem extremamente leve — não comercial, não pushy.\n"
+        "Ângulo: algo mudou no mercado ou no portfólio que pode ser relevante para ele.\n"
+        "Exemplos de abordagem: nova opção que encaixa no perfil dele, contexto de mercado, "
+        "queda de juros, novo lançamento na região de interesse.\n"
+        "Tom: quase informal, como uma dica de amigo que trabalha no mercado. "
+        "Máximo 2 frases. Nunca mencione que ele disse 'não' antes."
+    ),
+    "discard_60d": (
+        "Este lead está inativo há 60 dias após sinalizar que não era o momento.\n"
+        "Escreva UMA mensagem com ângulo completamente diferente do primeiro toque.\n"
+        "Aborde pelo lado do contexto pessoal/temporal: o mercado mudou, "
+        "uma oportunidade específica surgiu, ou simplesmente um 'check-in' humano.\n"
+        "Tom: genuíno, sem agenda de vendas aparente. 1-2 frases."
+    ),
+    "discard_90d": (
+        "Este lead está inativo há 90 dias. Último toque desta sequência.\n"
+        "Mensagem de 'porta sempre aberta' — deixa o caminho livre para quando ele estiver pronto.\n"
+        "Sem referência a imóveis específicos. Sem pressão. Tom: humano e respeitoso.\n"
+        "Ideia: 'quando você estiver pronto para retomar, estarei aqui com as melhores opções.'\n"
+        "Máximo 2 frases. Depois disso, lead vai para nutrição passiva (sem mais toques ativos)."
+    ),
+}
+
 _SCENARIO_PROMPTS = {
     "crm_reactivation": (
         "Este lead está parado há mais de 30 dias sem interação.\n"
@@ -287,7 +316,9 @@ def generate_message(
     """
     nome = lead_name or "lead"
 
-    if scenario == "new_property":
+    if scenario in _DISCARD_PROMPTS:
+        instruction = _DISCARD_PROMPTS[scenario]
+    elif scenario == "new_property":
         instruction = (
             f"Um novo imóvel entrou no portfólio da {IMOBILIARIA_NAME}:\n{extra_context}\n\n"
             "Passo 1 — avalie internamente (não escreva) a compatibilidade com o perfil do lead (1-10).\n"
@@ -423,6 +454,83 @@ def process_silence_followups(dry_run: bool = False):
             enviados += 1
 
     log.info("Silêncio: %d follow-ups enviados", enviados)
+    return enviados
+
+
+# ─── Cenário 5: Nutrição de descartados (30/60/90 dias) ─────────────────────
+def process_discard_nurture(dry_run: bool = False):
+    """
+    Sequência de nutrição para leads que sinalizaram descarte.
+    Cada etapa tem um ângulo diferente e é enviada uma única vez.
+
+    Lógica de progressão:
+      descartado_em + 30d → discard_30d (se não enviado)
+      descartado_em + 60d → discard_60d (se 30d já foi e não enviado)
+      descartado_em + 90d → discard_90d (se 60d já foi e não enviado)
+    """
+    log.info("=== Nutrição de descartados: buscando leads ===")
+    now = datetime.now(timezone.utc)
+
+    leads = _sb_get(
+        "leads",
+        (
+            f"client_id=eq.{CLIENT_ID}"
+            f"&descartado=eq.true"
+            f"&descartado_em=not.is.null"
+            f"&select=lead_phone,lead_name,score_breakdown,descartado_em,motivo_descarte"
+        )
+    )
+    log.info("%d leads descartados encontrados", len(leads))
+
+    enviados = 0
+    for lead in leads:
+        phone        = lead.get("lead_phone", "")
+        name         = lead.get("lead_name")
+        breakdown    = lead.get("score_breakdown") or {}
+        motivo       = lead.get("motivo_descarte", "")
+        descartado_em = parse_ts(lead.get("descartado_em", ""))
+
+        if not phone or not descartado_em:
+            continue
+
+        dias_desde_descarte = (now - descartado_em).days
+
+        # Determina qual etapa deve ser enviada
+        # Regra: só avança para a próxima se a anterior já foi enviada
+        etapa = None
+        if dias_desde_descarte >= 90 and was_sent(phone, "discard_60d") and not was_sent(phone, "discard_90d"):
+            etapa = "discard_90d"
+        elif dias_desde_descarte >= 60 and was_sent(phone, "discard_30d") and not was_sent(phone, "discard_60d"):
+            etapa = "discard_60d"
+        elif dias_desde_descarte >= 30 and not was_sent(phone, "discard_30d"):
+            etapa = "discard_30d"
+
+        if not etapa:
+            continue
+
+        log.info("Lead %s → %s (descartado há %dd, motivo: %s)", phone, etapa, dias_desde_descarte, motivo)
+
+        # Busca histórico para personalizar o ângulo
+        conversas = _sb_get(
+            "conversas",
+            f"client_id=eq.{CLIENT_ID}&lead_phone=eq.{phone}&order=created_at.asc&limit=20"
+        )
+        history = format_history(conversas)
+
+        # Contexto extra: portfólio resumido para referenciar oportunidades
+        extra = portfolio_summary()[:400] if portfolio_summary() else ""
+
+        msg = generate_message(etapa, name, history, breakdown, extra_context=extra, dry_run=dry_run)
+        if not msg:
+            continue
+
+        sent = send_whatsapp(phone, msg, dry_run=dry_run)
+        if sent:
+            if not dry_run:
+                record_sent(phone, etapa, msg)
+            enviados += 1
+
+    log.info("Nutrição de descartados: %d mensagens enviadas", enviados)
     return enviados
 
 
@@ -617,12 +725,17 @@ def main():
         process_new_property(imovel, dry_run=dry_run)
 
     elif "--crm" in sys.argv:
-        # Reativação de CRM: roda manualmente ou sábado de manhã
+        # Reativação de leads frios do CRM (> 30 dias sem interação)
         process_crm_reactivation(dry_run=dry_run)
 
+    elif "--discard" in sys.argv:
+        # Nutrição de leads descartados (sequência 30/60/90 dias)
+        process_discard_nurture(dry_run=dry_run)
+
     else:
-        # Padrão (chamado pelo timer a cada hora): silêncio
+        # Padrão (timer a cada hora): silêncio + descartados no mesmo ciclo
         process_silence_followups(dry_run=dry_run)
+        process_discard_nurture(dry_run=dry_run)
 
     log.info("Follow-up engine concluído.")
 
