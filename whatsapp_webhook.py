@@ -533,6 +533,120 @@ async def _supabase_confirm_visit(sender: str):
         log.warning("Falha ao registrar visita confirmada: %s", e)
 
 
+# ─── Extração de perfil estruturado do lead ──────────────────────────────────
+_PROFILE_EXTRACTION_TURNS = 5   # extrai após essa quantidade de turnos do lead
+
+async def _extract_and_save_lead_profile(sender: str, history: list[dict]):
+    """
+    Após N turnos de conversa, usa Claude Haiku para extrair um perfil
+    estruturado do lead e salva na tabela lead_profiles.
+    Idempotente: só re-extrai se a conversa cresceu ≥ 3 turnos desde a última extração.
+    """
+    user_turns = [m for m in history if m.get("role") == "user"]
+    total_turns = len(user_turns)
+
+    if total_turns < _PROFILE_EXTRACTION_TURNS:
+        return  # conversa ainda curta demais
+
+    # Verifica se já extraímos recentemente (cache Redis)
+    cache_key = f"whatsapp:profile_extracted:{sender}"
+    if redis_client:
+        try:
+            cached_turns = await redis_client.get(cache_key)
+            if cached_turns and (total_turns - int(cached_turns)) < 3:
+                log.debug("Perfil de %s extraído há menos de 3 turnos — skip", sender)
+                return
+        except Exception:
+            pass
+
+    # Formata histórico para o Haiku
+    hist_text = "\n".join(
+        f"{'Lead' if m['role'] == 'user' else 'Consultora'}: {m.get('content', '')[:300]}"
+        for m in history[-30:]
+    )
+
+    prompt = f"""Analise essa conversa de atendimento imobiliário de alto padrão e extraia o perfil estruturado do lead.
+
+CONVERSA:
+{hist_text}
+
+Responda APENAS com um JSON válido no formato abaixo (sem markdown, sem texto extra):
+{{
+  "budget_min": null,
+  "budget_max": null,
+  "budget_label": "",
+  "financing_interest": null,
+  "payment_preference": "",
+  "property_type": "",
+  "bedrooms_desired": null,
+  "area_min_m2": null,
+  "area_max_m2": null,
+  "neighborhoods": [],
+  "city": "",
+  "family_profile": "",
+  "children_ages": "",
+  "has_pets": null,
+  "purchase_purpose": "",
+  "timeline_months": null,
+  "main_motivation": "",
+  "key_objections": [],
+  "competing_properties": [],
+  "decision_blockers": [],
+  "confidence_score": 0.0
+}}
+
+Regras:
+- Use null para campos sem informação na conversa
+- budget_min/max em números (ex: 2000000 para R$ 2M)
+- neighborhoods como lista de strings
+- confidence_score de 0 a 1 (quanta informação você tem sobre esse lead)
+- family_profile: "casal sem filhos", "família com filhos", "investidor", "solteiro", "indefinido"
+- purchase_purpose: "moradia", "investimento", "segunda residência", "indefinido"
+- timeline_months: prazo estimado em meses (ex: 3, 6, 12, 24)"""
+
+    try:
+        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+
+        # Parse JSON
+        import json as _json
+        profile_data = _json.loads(raw)
+
+        # Salva no Supabase
+        sb = _get_supabase()
+        if sb:
+            loop = asyncio.get_event_loop()
+            record = {
+                "client_id":          _ctx_client_id(),
+                "lead_phone":         sender,
+                "extraction_turns":   total_turns,
+                "last_extracted_at":  "now()",
+                **{k: v for k, v in profile_data.items() if v is not None and v != "" and v != []}
+            }
+            await loop.run_in_executor(None, lambda: (
+                sb.table("lead_profiles")
+                  .upsert(record, on_conflict="client_id,lead_phone")
+                  .execute()
+            ))
+            log.info("Perfil estruturado extraído e salvo para %s (confiança: %.1f)",
+                     sender, profile_data.get("confidence_score", 0))
+
+        # Atualiza cache Redis para evitar re-extração desnecessária
+        if redis_client:
+            try:
+                await redis_client.setex(cache_key, 3600, str(total_turns))
+            except Exception:
+                pass
+
+    except Exception as e:
+        log.warning("Falha ao extrair perfil de %s: %s", sender, e)
+
+
 def _extract_name_from_reply(reply: str) -> str | None:
     """
     Tenta extrair o nome do lead da resposta da Sofia.
@@ -1346,6 +1460,10 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
         # ── Detecta confirmação de visita na resposta da Sofia ───────────────
         if _detect_visit_confirmation(reply_clean):
             asyncio.create_task(_supabase_confirm_visit(sender))
+
+        # ── Extrai perfil estruturado do lead após N turnos ──────────────────────
+        if len([m for m in history if m.get("role") == "user"]) >= _PROFILE_EXTRACTION_TURNS:
+            asyncio.create_task(_extract_and_save_lead_profile(sender, history))
 
         # ── Persiste no Supabase (fire-and-forget, não bloqueia resposta) ─────
         lead_name = _extract_name_from_reply(reply_clean)

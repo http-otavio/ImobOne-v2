@@ -75,6 +75,8 @@ TTL = {
     "discard_30d":      99999, # enviado uma vez, nunca repetir
     "discard_60d":      99999,
     "discard_90d":      99999,
+    "pre_visit_reminder": 99999,  # enviado uma vez, nunca repetir
+    "weekly_report":    168,      # re-enviar no ciclo seguinte (1 semana)
 }
 
 # Thresholds de silêncio
@@ -683,6 +685,406 @@ def process_new_property(imovel: dict, dry_run: bool = False):
     return notificados
 
 
+
+
+# ─── Cenário 8: Lembrete pré-visita (24h antes) ─────────────────────────────
+def process_pre_visit_reminders(dry_run: bool = False):
+    """
+    Envia lembrete ao lead 24h antes da visita confirmada:
+    - Mensagem de confirmação e detalhes
+    - Envia briefing completo do lead ao corretor (nome, perfil, sinais, histórico)
+    
+    Depende do campo visit_scheduled_at em leads (preenchido quando Sofia confirma visita).
+    """
+    log.info("=== Lembrete pré-visita: buscando leads com visita marcada ===")
+    now = datetime.now(timezone.utc)
+
+    # Janela: visitas entre 20h e 28h a partir de agora (24h ± 4h)
+    window_start = (now + timedelta(hours=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    window_end   = (now + timedelta(hours=28)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    import urllib.parse
+
+    leads = _sb_get(
+        "leads",
+        (
+            f"client_id=eq.{CLIENT_ID}"
+            f"&visita_agendada=eq.true"
+            f"&visit_scheduled_at=gte.{urllib.parse.quote(window_start)}"
+            f"&visit_scheduled_at=lte.{urllib.parse.quote(window_end)}"
+            f"&visit_reminder_sent=eq.false"
+            f"&select=lead_phone,lead_name,intention_score,score_breakdown,visit_scheduled_at"
+        )
+    )
+    log.info("%d leads com visita nas próximas 24-28h", len(leads))
+
+    enviados = 0
+    for lead in leads:
+        phone         = lead.get("lead_phone", "")
+        name          = lead.get("lead_name") or "cliente"
+        breakdown     = lead.get("score_breakdown") or {}
+        visit_at_str  = lead.get("visit_scheduled_at", "")
+
+        if not phone:
+            continue
+
+        if was_sent(phone, "pre_visit_reminder"):
+            continue
+
+        # Formata data/hora da visita para o lembrete
+        visit_dt = parse_ts(visit_at_str)
+        if visit_dt:
+            # Converte para Brasília (UTC-3)
+            brasilia_dt = visit_dt - timedelta(hours=3)
+            visit_fmt = brasilia_dt.strftime("%A, %d/%m, às %Hh%M")
+        else:
+            visit_fmt = "conforme combinado"
+
+        # Busca histórico para o briefing
+        conversas = _sb_get(
+            "conversas",
+            f"client_id=eq.{CLIENT_ID}&lead_phone=eq.{phone}&order=created_at.asc&limit=30"
+        )
+        history_text = "\n".join(
+            f"{'Lead' if c.get('role') == 'user' else CONSULTANT_NAME}: {c.get('content', '')[:250]}"
+            for c in conversas[-20:]
+        ) if conversas else "(sem histórico)"
+
+        sinais = ", ".join(f"{k}:{v}" for k, v in breakdown.items()) if breakdown else "não mapeados"
+
+        # 1. Mensagem de lembrete para o lead
+        reminder_prompt = f"""Você é {CONSULTANT_NAME}, consultora de imóveis de alto padrão da {IMOBILIARIA_NAME}.
+Escreva UMA mensagem WhatsApp de lembrete de visita para {name}.
+
+A visita é {visit_fmt}.
+
+Tom: elegante, confirmador, breve. Mencione o horário. Ofereça verificar se há dúvida.
+NUNCA mencione que é IA. Máximo 3 frases. Sem emojis."""
+
+        try:
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=200,
+                messages=[{"role": "user", "content": reminder_prompt}],
+            )
+            reminder_msg = resp.content[0].text.strip()
+        except Exception as e:
+            log.error("Falha ao gerar lembrete pré-visita: %s", e)
+            continue
+
+        # 2. Briefing completo para o corretor
+        corretor_number = os.getenv("CORRETOR_NUMBER", "")
+        if corretor_number:
+            briefing_prompt = f"""Gere um briefing estratégico em português para o corretor imobiliário sobre este lead.
+
+LEAD: {name} | {phone}
+SINAIS DE INTERESSE: {sinais}
+VISITA: {visit_fmt}
+
+HISTÓRICO:
+{history_text}
+
+Formato:
+📋 BRIEFING PRÉ-VISITA — {name}
+Visita: {visit_fmt}
+
+PERFIL: [2 frases sobre quem é e o que busca]
+MOTIVAÇÃO PRINCIPAL: [1 frase]
+SINAIS QUENTES: [2-3 pontos objetivos]
+OBJEÇÕES MAPEADAS: [o que pode travar]
+PONTO DE ATENÇÃO: [algo específico para focar na visita]
+PRÓXIMO PASSO RECOMENDADO: [1 ação clara pós-visita]
+
+Máximo 200 palavras. Direto e acionável."""
+
+            try:
+                resp2 = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=400,
+                    messages=[{"role": "user", "content": briefing_prompt}],
+                )
+                briefing_msg = resp2.content[0].text.strip()
+
+                if not dry_run:
+                    _send_whatsapp_message_sync(corretor_number, briefing_msg)
+                    log.info("Briefing pré-visita enviado ao corretor para lead %s", phone)
+                else:
+                    log.info("[DRY-RUN] Briefing corretor para %s:\n%s", phone, briefing_msg[:200])
+            except Exception as e:
+                log.error("Falha ao gerar/enviar briefing ao corretor: %s", e)
+
+        # Envia lembrete ao lead
+        sent = send_whatsapp(phone, reminder_msg, dry_run=dry_run)
+        if sent:
+            if not dry_run:
+                record_sent(phone, "pre_visit_reminder", reminder_msg)
+                # Marca reminder como enviado no lead
+                try:
+                    _sb_patch(
+                        f"leads?client_id=eq.{CLIENT_ID}&lead_phone=eq.{phone}",
+                        {"visit_reminder_sent": True}
+                    )
+                except Exception:
+                    pass
+            enviados += 1
+
+    log.info("Lembrete pré-visita: %d enviados", enviados)
+    return enviados
+
+
+def _sb_patch(path: str, data: dict) -> dict:
+    """PATCH (update) em registro Supabase."""
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    body = json.dumps(data).encode()
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        },
+        method="PATCH",
+    )
+    try:
+        with urllib.request.urlopen(req, context=_ssl()) as r:
+            return {}
+    except Exception as e:
+        log.warning("PATCH %s falhou: %s", path, e)
+        return {}
+
+
+def _send_whatsapp_message_sync(phone: str, text: str) -> bool:
+    """Envia mensagem WhatsApp via Evolution API (síncrono, para follow-up engine)."""
+    if not EVOLUTION_URL or not EVOLUTION_API_KEY:
+        return False
+    url = f"{EVOLUTION_URL}/message/sendText/{EVOLUTION_INSTANCE}"
+    payload = json.dumps({"number": phone, "text": text}).encode()
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "apikey": EVOLUTION_API_KEY,
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, context=_ssl(), timeout=15) as r:
+            return r.status < 300
+    except Exception as e:
+        log.error("Falha ao enviar WhatsApp para %s: %s", phone, e)
+        return False
+
+
+# ─── Cenário 9: Relatório semanal de inteligência ────────────────────────────
+def process_weekly_intelligence_report(dry_run: bool = False):
+    """
+    Toda segunda-feira às 8h, gera e envia ao gestor um relatório de inteligência com:
+    - Métricas da semana (novos leads, score médio, visitas, conversões)
+    - Leads quentes que precisam de ação
+    - Padrões detectados (bairros mais buscados, faixas de valor, objeções comuns)
+    - Recomendações de ação da semana
+    
+    Usa Claude Haiku para síntese inteligente. Envia via WhatsApp ao CORRETOR_NUMBER.
+    """
+    log.info("=== Relatório semanal de inteligência: gerando ===")
+    now = datetime.now(timezone.utc)
+
+    corretor_number = os.getenv("CORRETOR_NUMBER", "")
+    if not corretor_number:
+        log.warning("CORRETOR_NUMBER não configurado — relatório semanal não pode ser enviado")
+        return 0
+
+    # Janela da última semana
+    week_start = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    import urllib.parse
+
+    # 1. Leads novos na semana
+    new_leads = _sb_get(
+        "leads",
+        (
+            f"client_id=eq.{CLIENT_ID}"
+            f"&created_at=gte.{urllib.parse.quote(week_start)}"
+            f"&select=lead_phone,lead_name,intention_score,score_breakdown,visita_agendada,descartado"
+        )
+    )
+
+    # 2. Leads quentes (score >= 6) — todos, não só os da semana
+    hot_leads = _sb_get(
+        "leads",
+        (
+            f"client_id=eq.{CLIENT_ID}"
+            f"&intention_score=gte.6"
+            f"&descartado=eq.false"
+            f"&select=lead_phone,lead_name,intention_score,score_breakdown,ultima_interacao,visita_agendada"
+            f"&order=intention_score.desc"
+            f"&limit=10"
+        )
+    )
+
+    # 3. Atividade de conversas na semana
+    weekly_conversas = _sb_get(
+        "conversas",
+        (
+            f"client_id=eq.{CLIENT_ID}"
+            f"&created_at=gte.{urllib.parse.quote(week_start)}"
+            f"&role=eq.user"
+            f"&select=lead_phone,content"
+            f"&limit=200"
+        )
+    )
+
+    # 4. Perfis estruturados para padrões
+    profiles = _sb_get(
+        "lead_profiles",
+        (
+            f"client_id=eq.{CLIENT_ID}"
+            f"&select=neighborhoods,family_profile,budget_label,purchase_purpose,key_objections"
+            f"&limit=50"
+        )
+    )
+
+    # 5. Eventos de follow-up da semana
+    followup_events = _sb_get(
+        "followup_events",
+        (
+            f"client_id=eq.{CLIENT_ID}"
+            f"&sent_at=gte.{urllib.parse.quote(week_start)}"
+            f"&select=event_type,lead_phone"
+        )
+    )
+
+    # Compila dados para o Haiku
+    n_new = len(new_leads)
+    n_hot = len([l for l in hot_leads if not l.get("visita_agendada")])
+    n_visitas = len([l for l in new_leads + hot_leads if l.get("visita_agendada")])
+    n_descartados = len([l for l in new_leads if l.get("descartado")])
+    n_conversas = len(set(c.get("lead_phone") for c in weekly_conversas))
+    n_followups = len(followup_events)
+
+    # Extrai padrões de bairros
+    bairros_counter: dict = {}
+    for p in profiles:
+        for bairro in (p.get("neighborhoods") or []):
+            bairros_counter[bairro] = bairros_counter.get(bairro, 0) + 1
+    top_bairros = sorted(bairros_counter.items(), key=lambda x: -x[1])[:5]
+
+    # Extrai objeções mais comuns
+    objecoes_counter: dict = {}
+    for p in profiles:
+        for obj in (p.get("key_objections") or []):
+            objecoes_counter[obj[:50]] = objecoes_counter.get(obj[:50], 0) + 1
+    top_objecoes = sorted(objecoes_counter.items(), key=lambda x: -x[1])[:3]
+
+    # Extrai perfis familiares
+    perfis_counter: dict = {}
+    for p in profiles:
+        fp = p.get("family_profile", "indefinido") or "indefinido"
+        perfis_counter[fp] = perfis_counter.get(fp, 0) + 1
+
+    # Leads quentes resumidos
+    hot_summary = "\n".join(
+        f"- {l.get('lead_name', l.get('lead_phone', '?')[:8]+'...')} "
+        f"| Score {l.get('intention_score', 0)} "
+        f"| {'visita agendada' if l.get('visita_agendada') else 'sem visita'}"
+        for l in hot_leads[:5]
+    ) if hot_leads else "(nenhum lead quente no momento)"
+
+    # Amostra de conteúdo das conversas para análise
+    sample_msgs = " | ".join(
+        c.get("content", "")[:100]
+        for c in weekly_conversas[:20]
+    )
+
+    report_context = f"""Semana encerrada em: {now.strftime('%d/%m/%Y')}
+Imobiliária: {IMOBILIARIA_NAME} | Consultor: {CONSULTANT_NAME}
+
+MÉTRICAS DA SEMANA:
+- Novos leads: {n_new}
+- Leads ativos em conversa: {n_conversas}
+- Leads quentes (score ≥ 6): {n_hot}
+- Visitas confirmadas: {n_visitas}
+- Leads descartados: {n_descartados}
+- Follow-ups automáticos enviados: {n_followups}
+
+LEADS QUE PRECISAM DE AÇÃO HUMANA:
+{hot_summary}
+
+PADRÕES DETECTADOS:
+Bairros mais buscados: {', '.join(f"{b}({n})" for b, n in top_bairros) or 'dados insuficientes'}
+Perfis: {', '.join(f"{p}({n})" for p, n in perfis_counter.items()) or 'dados insuficientes'}
+Objeções mais comuns: {', '.join(f"{o}({n})" for o, n in top_objecoes) or 'dados insuficientes'}
+
+AMOSTRA DE CONVERSAS:
+{sample_msgs[:800]}"""
+
+    prompt = f"""Você é um analista de inteligência imobiliária. Gere um relatório semanal executivo para o gestor/corretor.
+
+DADOS DA SEMANA:
+{report_context}
+
+Escreva em português brasileiro. Tom: executivo, direto, acionável.
+Estrutura:
+[Cabeçalho com data e nome da imobiliária]
+
+RESUMO EXECUTIVO: [2-3 frases com o estado geral da semana]
+
+NÚMERO QUE IMPORTA: [uma métrica que merece destaque especial e por quê]
+
+LEADS PRIORITÁRIOS ESTA SEMANA: [lista dos 3-5 leads que precisam de ação humana, com o que fazer]
+
+PADRÃO DETECTADO: [1-2 insights sobre o que os leads estão buscando — use os dados de bairros e perfis]
+
+RECOMENDAÇÃO DA SEMANA: [1 ação concreta que o gestor pode tomar para melhorar performance]
+
+Máximo 350 palavras. Sem emojis. Sem bullet points excessivos — escreva em prosa quando possível."""
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        report_text = resp.content[0].text.strip()
+        log.info("Relatório semanal gerado: %d chars", len(report_text))
+    except Exception as e:
+        log.error("Falha ao gerar relatório semanal: %s", e)
+        return 0
+
+    # Salva no Supabase para histórico
+    week_start_date = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    try:
+        _sb_post("weekly_reports", {
+            "client_id":   CLIENT_ID,
+            "week_start":  week_start_date,
+            "report_data": {
+                "text":       report_text,
+                "metrics": {
+                    "new_leads":       n_new,
+                    "active_leads":    n_conversas,
+                    "hot_leads":       n_hot,
+                    "visits":          n_visitas,
+                    "discarded":       n_descartados,
+                    "followups_sent":  n_followups,
+                },
+                "top_bairros":   top_bairros,
+                "top_objecoes":  top_objecoes,
+            }
+        })
+    except Exception as e:
+        log.warning("Falha ao salvar relatório no Supabase: %s", e)
+
+    if dry_run:
+        log.info("[DRY-RUN] Relatório semanal:\n%s", report_text)
+        return 1
+
+    sent = send_whatsapp(corretor_number, report_text, dry_run=False)
+    log.info("Relatório semanal %s ao corretor", "enviado" if sent else "FALHOU")
+    return 1 if sent else 0
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 def main():
     dry_run = "--dry-run" in sys.argv
@@ -732,10 +1134,19 @@ def main():
         # Nutrição de leads descartados (sequência 30/60/90 dias)
         process_discard_nurture(dry_run=dry_run)
 
+    elif "--weekly-report" in sys.argv:
+        # Relatório semanal de inteligência (chamado toda segunda via timer especial)
+        process_weekly_intelligence_report(dry_run=dry_run)
+
+    elif "--pre-visit" in sys.argv:
+        # Lembretes pré-visita (pode ser chamado a cada hora junto com silêncio)
+        process_pre_visit_reminders(dry_run=dry_run)
+
     else:
-        # Padrão (timer a cada hora): silêncio + descartados no mesmo ciclo
+        # Padrão (timer a cada hora): silêncio + descartados + lembretes pré-visita
         process_silence_followups(dry_run=dry_run)
         process_discard_nurture(dry_run=dry_run)
+        process_pre_visit_reminders(dry_run=dry_run)
 
     log.info("Follow-up engine concluído.")
 
