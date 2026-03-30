@@ -12,9 +12,14 @@ Suporte a tipos de mídia recebidos:
   - Imagem (imageMessage) → descrição via Claude Vision
   - Documento (documentMessage) → caption ou notificação de recebimento
 
+Score de intenção:
+  - Calculado a cada mensagem do lead com base em sinais linguísticos
+  - Armazenado em Redis (hot) e Supabase leads.intention_score (cold)
+  - Quando score >= CORRETOR_SCORE_THRESHOLD → notifica corretor via WhatsApp
+
 Persistência:
-  - Redis (hot): histórico de conversa por sender, dedup de fotos
-  - Supabase (cold): tabela leads + tabela conversas por cliente
+  - Redis (hot): histórico de conversa por sender, dedup de fotos, score de intenção
+  - Supabase (cold): tabela leads (com score) + tabela conversas por cliente
 """
 
 import asyncio
@@ -56,6 +61,30 @@ ELEVENLABS_MODEL     = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
 REDIS_URL            = os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
 CLIENT_ID            = os.getenv("DEMO_CLIENT_ID", "demo_imobiliaria_vendas")
 MAX_HISTORY          = 20   # turnos máximos por conversa
+
+# Notificação ao corretor
+CORRETOR_NUMBER          = os.getenv("CORRETOR_NUMBER", "")          # ex: 5511999999999
+CORRETOR_SCORE_THRESHOLD = int(os.getenv("CORRETOR_SCORE_THRESHOLD", "8"))
+CORRETOR_COOLDOWN_HOURS  = int(os.getenv("CORRETOR_COOLDOWN_HOURS", "24"))
+
+# ─── Score de intenção — sinais e pontuação ──────────────────────────────────
+# Cada tupla: (regex_pattern, pontos, label_para_breakdown)
+_SCORE_SIGNALS: list[tuple[str, int, str]] = [
+    # Alto sinal — intenção de visita / agendamento
+    (r'visita|agendar|quero\s+conhecer|quando\s+posso\s+ver|quero\s+ver\s+o\s+im[oó]vel|marcar\s+uma\s+visita', 4, "horario_visita"),
+    # Mencionou dados pessoais (nome, e-mail)
+    (r'meu\s+nome\s+[eé]|me\s+chamo|sou\s+[A-ZÁÉÍÓÚ][a-záéíóú]+|meu\s+e[\-]?mail|meu\s+contato', 3, "dados_pessoais"),
+    # Pergunta técnica específica sobre imóvel
+    (r'quantos?\s+quartos?|tem\s+vaga|qual\s+o\s+andar|quantos?\s+banheiros?|[aá]rea\s+([\wé]+\s+)?m[²2]|suite?|lazer|piscina|academia|varanda', 3, "pergunta_especifica"),
+    # Citou imóvel ou bairro específico do portfólio
+    (r'AV\d{3}|Jardins|Itaim|Vila\s+Nova\s+Concei[cç][aã]o|Moema|Pinheiros|Higien[oó]polis|Perdizes', 3, "interesse_imovel"),
+    # Solicitou fotos / materiais
+    (r'foto|imagem|v[ií]deo|planta\s+baixa|tour\s+virtual|manda\s+mais', 2, "foto_solicitada"),
+    # Pergunta de financiamento / crédito
+    (r'financiam\w+|entrada|parcela|cr[eé]dito\s+imobili[aá]rio|fgts|banco|juros', 2, "financiamento"),
+    # Pergunta direta de valor
+    (r'\bvalor\b|\bpre[cç]o\b|\bcusto\b|quanto\s+custa|qual\s+o\s+pre[cç]o|R\$\s*\d', 2, "pergunta_valor"),
+]
 
 # ─── Estado em memória (fallback se Redis indisponível) ──────────────────────
 _memory_history: dict[str, list] = defaultdict(list)
@@ -284,6 +313,151 @@ def _extract_name_from_reply(reply: str) -> str | None:
                             "Olá", "Ótimo", "Perfeito", "Excelente", "Entendido"):
                 return name
     return None
+
+
+# ─── Score de intenção — cálculo e persistência ──────────────────────────────
+
+async def _get_lead_score(sender: str) -> int:
+    """Recupera score acumulado do lead (Redis → memória)."""
+    if redis_client:
+        try:
+            val = await redis_client.get(f"whatsapp:score:{sender}")
+            return int(val) if val else 0
+        except Exception:
+            pass
+    return int(_memory_history.get(f"score:{sender}", 0))
+
+
+async def _update_lead_score(sender: str, user_message: str) -> tuple[int, int, dict]:
+    """
+    Calcula delta do score para a mensagem atual e atualiza o acumulado.
+    Retorna (novo_score, delta, breakdown_dict).
+    """
+    delta = 0
+    breakdown: dict[str, int] = {}
+
+    for pattern, points, label in _SCORE_SIGNALS:
+        if re.search(pattern, user_message, re.IGNORECASE):
+            delta += points
+            breakdown[label] = breakdown.get(label, 0) + points
+
+    current = await _get_lead_score(sender)
+    new_score = current + delta
+
+    if delta > 0:
+        if redis_client:
+            try:
+                await redis_client.set(
+                    f"whatsapp:score:{sender}", new_score,
+                    ex=86400 * 7,  # 7 dias
+                )
+            except Exception:
+                pass
+        _memory_history[f"score:{sender}"] = new_score
+
+    if delta > 0:
+        log.info("Score %s: +%d → %d | sinais: %s", sender, delta, new_score, breakdown)
+
+    return new_score, delta, breakdown
+
+
+async def _supabase_update_score(
+    sender: str,
+    score: int,
+    breakdown: dict,
+    corretor_notified: bool = False,
+    corretor_score: int = 0,
+):
+    """Atualiza score e breakdown no registro do lead no Supabase."""
+    sb = _get_supabase()
+    if not sb:
+        return
+    try:
+        loop = asyncio.get_event_loop()
+        data: dict = {
+            "client_id":       CLIENT_ID,
+            "lead_phone":      sender,
+            "intention_score": score,
+            "score_breakdown": breakdown,
+        }
+        if corretor_notified:
+            from datetime import datetime, timezone
+            data["corretor_notified_at"]    = datetime.now(timezone.utc).isoformat()
+            data["corretor_notified_score"] = corretor_score
+
+        await loop.run_in_executor(None, lambda: (
+            sb.table("leads")
+              .upsert(data, on_conflict="client_id,lead_phone")
+              .execute()
+        ))
+        log.info("Score persistido no Supabase: %s → %d", sender, score)
+    except Exception as e:
+        log.warning("Falha ao atualizar score Supabase: %s", e)
+
+
+# ─── Notificação ao corretor ──────────────────────────────────────────────────
+
+async def _should_notify_corretor(sender: str, score: int) -> bool:
+    """
+    Verifica se o corretor deve ser notificado.
+    Condições: score >= threshold E cooldown expirado E número configurado.
+    """
+    if not CORRETOR_NUMBER:
+        return False
+    if score < CORRETOR_SCORE_THRESHOLD:
+        return False
+    # Verifica cooldown (Redis TTL)
+    cooldown_key = f"whatsapp:corretor_notified:{sender}"
+    if redis_client:
+        try:
+            exists = await redis_client.exists(cooldown_key)
+            return not bool(exists)
+        except Exception:
+            pass
+    # Sem Redis: usa memória local (sem cooldown persistente — aceita duplicatas em restart)
+    return f"notified:{sender}" not in _memory_history
+
+
+async def _notify_corretor(
+    sender: str,
+    score: int,
+    user_message: str,
+    lead_name: str | None,
+    history_len: int = 0,
+):
+    """
+    Envia alerta ao corretor via WhatsApp quando lead atinge threshold de intenção.
+    """
+    if not CORRETOR_NUMBER:
+        return
+
+    nome_display = lead_name or "não identificado"
+    snippet = user_message[:200].replace("\n", " ")
+
+    msg = (
+        f"🔔 *Lead Quente — Sofia IA*\n\n"
+        f"📱 Número: {sender}\n"
+        f"👤 Nome: {nome_display}\n"
+        f"⚡ Score de intenção: *{score}* (threshold: {CORRETOR_SCORE_THRESHOLD})\n"
+        f"💬 Mensagens na conversa: {history_len // 2}\n\n"
+        f"*Última mensagem do lead:*\n"
+        f"_{snippet}_\n\n"
+        f"Acesse o painel para ver o histórico completo."
+    )
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, send_whatsapp_message, CORRETOR_NUMBER, msg)
+    log.info("Corretor notificado sobre lead %s (score=%d)", sender, score)
+
+    # Marca cooldown no Redis
+    cooldown_key = f"whatsapp:corretor_notified:{sender}"
+    cooldown_secs = CORRETOR_COOLDOWN_HOURS * 3600
+    if redis_client:
+        try:
+            await redis_client.set(cooldown_key, "1", ex=cooldown_secs)
+        except Exception:
+            pass
+    _memory_history[f"notified:{sender}"] = True
 
 
 # ─── ElevenLabs TTS → PTT ────────────────────────────────────────────────────
@@ -670,14 +844,20 @@ app = FastAPI(title="ImobOne WhatsApp Webhook", lifespan=lifespan)
 @app.get("/health")
 async def health():
     return {
-        "status":             "ok",
-        "instance":           EVOLUTION_INSTANCE,
-        "client":             CLIENT_ID,
-        "portfolio_size":     len(_portfolio_cache),
-        "foto_config":        ONBOARDING.get("midia", {}).get("foto_config", "não configurado"),
+        "status":              "ok",
+        "instance":            EVOLUTION_INSTANCE,
+        "client":              CLIENT_ID,
+        "portfolio_size":      len(_portfolio_cache),
+        "foto_config":         ONBOARDING.get("midia", {}).get("foto_config", "não configurado"),
         "audio_transcription": bool(OPENAI_API_KEY),
-        "supabase":           bool(SUPABASE_URL and SUPABASE_KEY),
-        "elevenlabs_tts":     bool(ELEVENLABS_API_KEY),
+        "supabase":            bool(SUPABASE_URL and SUPABASE_KEY),
+        "elevenlabs_tts":      bool(ELEVENLABS_API_KEY),
+        "corretor_notify": {
+            "configured":  bool(CORRETOR_NUMBER),
+            "number":      f"...{CORRETOR_NUMBER[-4:]}" if CORRETOR_NUMBER else None,
+            "threshold":   CORRETOR_SCORE_THRESHOLD,
+            "cooldown_h":  CORRETOR_COOLDOWN_HOURS,
+        },
     }
 
 
@@ -819,6 +999,9 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
 
         log.info("Mensagem processada de %s: %s", sender, user_message[:100])
 
+        # ── Atualiza score de intenção ─────────────────────────────────────────
+        new_score, score_delta, score_breakdown = await _update_lead_score(sender, user_message)
+
         # ── Consulta LLM ──────────────────────────────────────────────────────
         history = await get_history(redis_client, sender)
         reply   = await run_consultant(history, user_message)
@@ -856,6 +1039,20 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
         asyncio.create_task(_supabase_append_conversa(sender, "user", user_message,
                                                        media_info.get("type", "text") if media_info else "text"))
         asyncio.create_task(_supabase_append_conversa(sender, "assistant", reply_clean))
+
+        # ── Notifica corretor se lead atingiu threshold ───────────────────────
+        should_notify = await _should_notify_corretor(sender, new_score)
+        if should_notify:
+            asyncio.create_task(_notify_corretor(
+                sender, new_score, user_message, lead_name, len(history)
+            ))
+            asyncio.create_task(_supabase_update_score(
+                sender, new_score, score_breakdown,
+                corretor_notified=True, corretor_score=new_score
+            ))
+        elif score_delta > 0:
+            # Score mudou mas ainda não notifica — persiste atualização silenciosa
+            asyncio.create_task(_supabase_update_score(sender, new_score, score_breakdown))
 
         # ── Envia resposta de texto ───────────────────────────────────────────
         await loop.run_in_executor(None, send_whatsapp_message, sender, reply_clean)
