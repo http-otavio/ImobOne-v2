@@ -1,0 +1,21 @@
+{
+  "_comentario": "Mapa de instâncias Evolution API → configuração por cliente. Adicionar uma entrada por cliente contratado.",
+  "_schema_versao": "1.0",
+  "_campos_obrigatorios": ["client_id", "evolution_instance", "nome_consultor", "nome_imobiliaria", "cidade_atuacao"],
+
+  "devlabz": {
+    "_comentario": "Instância demo — Ávora Imóveis. NÃO usar em produção para cliente real.",
+    "client_id":                "demo_imobiliaria_vendas",
+    "evolution_instance":       "devlabz",
+    "nome_consultor":           "Sofia",
+    "nome_imobiliaria":         "Ávora Imóveis",
+    "cidade_atuacao":           "São Paulo",
+    "tipo_atuacao":             "vendas de alto padrão",
+    "palavras_proibidas":       "baratinho, promoção, urgente, desconto agressivo",
+    "corretor_number":          "5511973722075",
+    "corretor_score_threshold": 8,
+    "corretor_cooldown_hours":  24,
+    "elevenlabs_voice_id":      "EXAVITQu4vr4xnSDxMaL",
+    "onboarding_path":          "clients/demo_imobiliaria_vendas/onboarding.json"
+  }
+}

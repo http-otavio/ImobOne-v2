@@ -1,0 +1,1047 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ImobOne — Formulário de Onboarding</title>
+<style>
+  :root {
+    --bg:        #0f1117;
+    --surface:   #1a1d27;
+    --border:    #2a2d3a;
+    --accent:    #7c6af7;
+    --accent2:   #4fa3e3;
+    --text:      #e8eaf0;
+    --muted:     #8b8fa8;
+    --success:   #22c55e;
+    --error:     #ef4444;
+    --radius:    10px;
+    --gap:       20px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 32px 16px;
+    min-height: 100vh;
+  }
+
+  .container {
+    max-width: 860px;
+    margin: 0 auto;
+  }
+
+  /* Header */
+  .header {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+  .header-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 4px 14px;
+    border-radius: 20px;
+    margin-bottom: 12px;
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  .header p {
+    color: var(--muted);
+    font-size: 15px;
+  }
+
+  /* Progress */
+  .progress-bar {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    height: 6px;
+    margin: 24px 0 36px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 20px;
+    transition: width 0.4s ease;
+    width: 0%;
+  }
+
+  /* Section */
+  .section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+    margin-bottom: 20px;
+  }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .section-title { font-size: 17px; font-weight: 600; color: #fff; }
+  .section-desc  { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+  /* Grid */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--gap); }
+  @media (max-width: 620px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  }
+
+  /* Field */
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field.full { grid-column: 1 / -1; }
+  label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  label .req { color: var(--accent); font-size: 11px; }
+  input[type="text"],
+  input[type="number"],
+  input[type="email"],
+  input[type="url"],
+  select,
+  textarea {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 14px;
+    padding: 10px 14px;
+    width: 100%;
+    transition: border-color 0.2s;
+    font-family: inherit;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(124, 106, 247, 0.12);
+  }
+  input::placeholder, textarea::placeholder { color: var(--muted); opacity: 0.7; }
+  textarea { resize: vertical; min-height: 80px; }
+  select option { background: var(--surface); }
+
+  /* Checkbox group */
+  .check-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .check-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    font-size: 13px;
+    user-select: none;
+  }
+  .check-item:hover { border-color: var(--accent); }
+  .check-item input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+  .check-item.checked { border-color: var(--accent); background: rgba(124, 106, 247, 0.08); }
+
+  /* Corretor cards */
+  #corretores-list { display: flex; flex-direction: column; gap: 16px; }
+  .corretor-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    position: relative;
+  }
+  .corretor-card .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    margin-bottom: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .btn-remove {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    background: none;
+    border: 1px solid #3a2a2a;
+    border-radius: 6px;
+    color: var(--error);
+    font-size: 12px;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .btn-remove:hover { background: rgba(239, 68, 68, 0.12); }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 20px;
+    transition: opacity 0.2s, transform 0.1s;
+  }
+  .btn:hover  { opacity: 0.88; }
+  .btn:active { transform: scale(0.98); }
+  .btn-primary   { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; }
+  .btn-outline   { background: none; border: 1px solid var(--border); color: var(--text); }
+  .btn-success   { background: var(--success); color: #fff; font-size: 16px; padding: 14px 28px; width: 100%; justify-content: center; }
+  .btn-icon      { font-size: 16px; padding: 10px 14px; }
+
+  /* Actions */
+  .actions {
+    margin-top: 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* Preview */
+  #json-preview {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: #a8d8a8;
+    display: none;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 16px;
+    white-space: pre;
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--success);
+    color: #fff;
+    padding: 14px 22px;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 14px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.3s, transform 0.3s;
+    z-index: 1000;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+
+  /* Info box */
+  .info-box {
+    background: rgba(79, 163, 227, 0.08);
+    border: 1px solid rgba(79, 163, 227, 0.25);
+    border-radius: 8px;
+    color: var(--accent2);
+    font-size: 13px;
+    padding: 12px 16px;
+    margin-top: 12px;
+  }
+  .info-box strong { color: #fff; }
+
+  /* Tags input */
+  .tags-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    min-height: 42px;
+    cursor: text;
+    transition: border-color 0.2s;
+  }
+  .tags-container:focus-within { border-color: var(--accent); }
+  .tag {
+    background: rgba(124, 106, 247, 0.15);
+    border: 1px solid rgba(124, 106, 247, 0.3);
+    border-radius: 6px;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 3px 10px;
+  }
+  .tag .tag-x { cursor: pointer; font-size: 14px; opacity: 0.7; }
+  .tag .tag-x:hover { opacity: 1; }
+  .tags-input {
+    background: none;
+    border: none;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+    min-width: 120px;
+    outline: none;
+    padding: 2px 4px;
+    flex: 1;
+  }
+
+  hr.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-badge">ImobOne Platform</div>
+    <h1>Formulário de Onboarding</h1>
+    <p>Preencha os dados da imobiliária para gerar o arquivo de configuração do consultor IA</p>
+  </div>
+
+  <!-- Progress -->
+  <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+
+  <form id="onboarding-form" novalidate>
+
+    <!-- ── SEÇÃO 1: Identificação ─────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">🏢</div>
+        <div>
+          <div class="section-title">Identificação da Imobiliária</div>
+          <div class="section-desc">Dados básicos que identificam este cliente no sistema</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label>ID do cliente <span class="req">*</span></label>
+          <input type="text" id="client_id" placeholder="ex: avora_imoveis_sp" pattern="[a-z0-9_]+" required>
+          <span style="font-size:12px;color:var(--muted);">Somente letras minúsculas, números e _</span>
+        </div>
+        <div class="field">
+          <label>Nome da imobiliária <span class="req">*</span></label>
+          <input type="text" id="nome_imobiliaria" placeholder="ex: Ávora Imóveis" required>
+        </div>
+        <div class="field">
+          <label>Cidade de atuação <span class="req">*</span></label>
+          <input type="text" id="cidade_atuacao" placeholder="ex: São Paulo" required>
+        </div>
+        <div class="field">
+          <label>Site institucional</label>
+          <input type="url" id="site" placeholder="https://www.imobiliaria.com.br">
+        </div>
+      </div>
+
+      <hr class="divider">
+      <div class="field">
+        <label>Segmentos de atuação <span class="req">*</span></label>
+        <div class="check-group" id="segmentos-group">
+          <label class="check-item" id="seg-vendas">
+            <input type="checkbox" value="vendas"> Vendas
+          </label>
+          <label class="check-item" id="seg-aluguel">
+            <input type="checkbox" value="aluguel"> Aluguel
+          </label>
+          <label class="check-item" id="seg-lancamentos">
+            <input type="checkbox" value="lancamentos"> Lançamentos
+          </label>
+          <label class="check-item" id="seg-temporada">
+            <input type="checkbox" value="temporada"> Temporada
+          </label>
+        </div>
+      </div>
+
+      <hr class="divider">
+      <div class="grid-3">
+        <div class="field">
+          <label>Ticket médio — Vendas (R$)</label>
+          <input type="number" id="ticket_vendas" placeholder="ex: 3000000" min="0">
+        </div>
+        <div class="field">
+          <label>Ticket médio — Aluguel (R$/mês)</label>
+          <input type="number" id="ticket_aluguel" placeholder="ex: 15000" min="0">
+        </div>
+        <div class="field">
+          <label>Portais de anúncio</label>
+          <div class="tags-container" id="portais-container">
+            <input class="tags-input" id="portais-input" placeholder="ZAP Imóveis, VivaReal...">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SEÇÃO 2: Consultor IA ──────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">🤖</div>
+        <div>
+          <div class="section-title">Identidade do Consultor IA</div>
+          <div class="section-desc">Como o consultor virtual vai se apresentar para os leads</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label>Nome do consultor <span class="req">*</span></label>
+          <input type="text" id="nome_consultor" placeholder="ex: Sofia, Julia, Marco" required>
+        </div>
+        <div class="field">
+          <label>Voz ElevenLabs</label>
+          <select id="voice_id">
+            <option value="EXAVITQu4vr4xnSDxMaL">Sarah (multilingual) — padrão</option>
+            <option value="lWq4KDY8znfkV0DrK8Vb">Yasmin (BR nativo — requer Starter $5/mês)</option>
+            <option value="custom">Voz personalizada (informe o ID abaixo)</option>
+          </select>
+        </div>
+        <div class="field" id="custom-voice-field" style="display:none;">
+          <label>ElevenLabs Voice ID personalizado</label>
+          <input type="text" id="custom_voice_id" placeholder="ex: 21m00Tcm4TlvDq8ikWAM">
+        </div>
+        <div class="field">
+          <label>Tipo de atuação (para o prompt)</label>
+          <input type="text" id="tipo_atuacao" placeholder="ex: vendas de alto padrão">
+        </div>
+      </div>
+      <hr class="divider">
+      <div class="field">
+        <label>Palavras e expressões proibidas</label>
+        <div class="tags-container" id="proibidas-container">
+          <input class="tags-input" id="proibidas-input" placeholder="baratinho, promoção, urgente...">
+        </div>
+        <span style="font-size:12px;color:var(--muted);">Pressione Enter para adicionar cada termo</span>
+      </div>
+    </div>
+
+    <!-- ── SEÇÃO 3: Portfólio ─────────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">🏠</div>
+        <div>
+          <div class="section-title">Portfólio de Imóveis</div>
+          <div class="section-desc">Arquivo CSV com os imóveis que serão indexados no pgvector</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label>Arquivo CSV do portfólio <span class="req">*</span></label>
+          <input type="text" id="portfolio_path" placeholder="ex: portfolio_avora.csv" required>
+          <span style="font-size:12px;color:var(--muted);">Será salvo em clients/{client_id}/{nome_arquivo}</span>
+        </div>
+        <div class="field">
+          <label>Total estimado de imóveis</label>
+          <input type="number" id="total_imoveis" placeholder="ex: 87" min="1">
+        </div>
+      </div>
+      <div class="info-box">
+        📎 <strong>Formato esperado do CSV:</strong> id, tipo, bairro, quartos, area_m2, valor, descricao, fotos_url, lat, lng — cada linha = 1 imóvel.
+        Envie o arquivo separadamente via WhatsApp ou e-mail após o setup.
+      </div>
+    </div>
+
+    <!-- ── SEÇÃO 4: Corretores ───────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">👥</div>
+        <div>
+          <div class="section-title">Corretores</div>
+          <div class="section-desc">Profissionais que receberão alertas de leads qualificados</div>
+        </div>
+      </div>
+      <div id="corretores-list"></div>
+      <button type="button" class="btn btn-outline" onclick="addCorretor()" style="margin-top:16px;">
+        + Adicionar Corretor
+      </button>
+    </div>
+
+    <!-- ── SEÇÃO 5: Notificações ─────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">🔔</div>
+        <div>
+          <div class="section-title">Notificações ao Corretor</div>
+          <div class="section-desc">Configuração do alerta automático por score de intenção</div>
+        </div>
+      </div>
+      <div class="grid-3">
+        <div class="field">
+          <label>Número do corretor (WhatsApp) <span class="req">*</span></label>
+          <input type="text" id="corretor_number" placeholder="5511999999999" required>
+          <span style="font-size:12px;color:var(--muted);">DDI + DDD + número, sem símbolos</span>
+        </div>
+        <div class="field">
+          <label>Score mínimo para notificar</label>
+          <input type="number" id="corretor_threshold" value="8" min="1" max="30">
+          <span style="font-size:12px;color:var(--muted);">Padrão: 8 pontos</span>
+        </div>
+        <div class="field">
+          <label>Cooldown entre notificações (horas)</label>
+          <input type="number" id="corretor_cooldown" value="24" min="1" max="168">
+          <span style="font-size:12px;color:var(--muted);">Padrão: 24 horas</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SEÇÃO 6: Horários ──────────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">🕐</div>
+        <div>
+          <div class="section-title">Horários de Atendimento</div>
+          <div class="section-desc">Sofia pode atender fora do horário, mas notifica o lead sobre o horário comercial</div>
+        </div>
+      </div>
+      <div class="grid-3">
+        <div class="field">
+          <label>Início do expediente</label>
+          <input type="text" id="horario_inicio" value="08:00" placeholder="08:00">
+        </div>
+        <div class="field">
+          <label>Fim do expediente</label>
+          <input type="text" id="horario_fim" value="20:00" placeholder="20:00">
+        </div>
+        <div class="field" style="justify-content:flex-end;">
+          <div class="check-group">
+            <label class="check-item" id="atende-sab">
+              <input type="checkbox" id="atende_sabado" checked> Atende sábado
+            </label>
+            <label class="check-item" id="atende-dom">
+              <input type="checkbox" id="atende_domingo"> Atende domingo
+            </label>
+          </div>
+        </div>
+      </div>
+      <hr class="divider">
+      <div class="field">
+        <label>Mensagem fora do horário</label>
+        <textarea id="msg_fora_horario" rows="2">Olá! Nosso horário de atendimento é de {horario_inicio} às {horario_fim}, de segunda a sábado. Registrei sua mensagem com carinho e {nome_consultor} entrará em contato assim que possível. Até logo!</textarea>
+      </div>
+    </div>
+
+    <!-- ── SEÇÃO 7: Regras de Negócio ────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">📋</div>
+        <div>
+          <div class="section-title">Regras de Negócio</div>
+          <div class="section-desc">Instruções específicas que o consultor deve seguir</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label>Pode falar de desconto?</label>
+          <select id="pode_desconto">
+            <option value="true">Sim</option>
+            <option value="false">Não</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Desconto máximo permitido (%)</label>
+          <input type="number" id="desconto_max" value="3" min="0" max="30">
+        </div>
+        <div class="field">
+          <label>Parceiros de financiamento</label>
+          <div class="tags-container" id="financiamento-container">
+            <input class="tags-input" id="financiamento-input" placeholder="Itaú BBA, Bradesco...">
+          </div>
+        </div>
+        <div class="field">
+          <label>Garantias aceitas (aluguel)</label>
+          <div class="tags-container" id="garantias-container">
+            <input class="tags-input" id="garantias-input" placeholder="Fiador, Seguro Fiança...">
+          </div>
+        </div>
+      </div>
+      <hr class="divider">
+      <div class="field full">
+        <label>Regras adicionais específicas</label>
+        <textarea id="regras_adicionais" rows="3" placeholder="ex: Nunca revelar o nome do proprietário sem autorização prévia do corretor&#10;Sempre oferecer tour virtual antes de agendar visita presencial"></textarea>
+      </div>
+    </div>
+
+    <!-- ── SEÇÃO 8: CRM ──────────────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">🔗</div>
+        <div>
+          <div class="section-title">Integração com CRM</div>
+          <div class="section-desc">Opcional — conectar Sofia ao CRM já utilizado pela imobiliária</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label>CRM utilizado</label>
+          <select id="crm_nome">
+            <option value="">Nenhum por enquanto</option>
+            <option value="CV CRM">CV CRM</option>
+            <option value="Pipedrive">Pipedrive</option>
+            <option value="RD Station">RD Station</option>
+            <option value="HubSpot">HubSpot</option>
+            <option value="Salesforce">Salesforce</option>
+            <option value="Jetimob">Jetimob</option>
+            <option value="Kenlo">Kenlo</option>
+            <option value="Outro">Outro</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Webhook URL do CRM</label>
+          <input type="url" id="crm_webhook" placeholder="https://api.seucrm.com/webhook/leads">
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SEÇÃO 9: Instância Evolution (multi-tenant) ───────────────────── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">📡</div>
+        <div>
+          <div class="section-title">Instância WhatsApp</div>
+          <div class="section-desc">Nome da instância Evolution API dedicada para este cliente</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label>Nome da instância Evolution <span class="req">*</span></label>
+          <input type="text" id="evolution_instance" placeholder="ex: avora_sp" required>
+          <span style="font-size:12px;color:var(--muted);">Identificador único desta instância no servidor</span>
+        </div>
+        <div class="field">
+          <label>Número WhatsApp Business</label>
+          <input type="text" id="whatsapp_number" placeholder="5511900000000">
+          <span style="font-size:12px;color:var(--muted);">Número vinculado à instância (para referência)</span>
+        </div>
+      </div>
+      <div class="info-box">
+        🔑 <strong>Próximo passo após exportar:</strong> adicionar a entrada gerada ao arquivo
+        <code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;">clients_registry.json</code>
+        no servidor, depois reiniciar o webhook. A Sofia começa a atender automaticamente.
+      </div>
+    </div>
+
+    <!-- ── SEÇÃO 10: Dashboard ───────────────────────────────────────────── -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-icon">📊</div>
+        <div>
+          <div class="section-title">Dashboard e Relatórios</div>
+          <div class="section-desc">Configuração do painel do gestor</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label>E-mail do gestor principal</label>
+          <input type="email" id="email_gestor" placeholder="gestor@imobiliaria.com.br">
+        </div>
+        <div class="field">
+          <label>Relatório semanal automático?</label>
+          <select id="relatorio_semanal">
+            <option value="true">Sim</option>
+            <option value="false">Não</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="actions">
+      <button type="button" class="btn btn-outline" onclick="togglePreview()">
+        👁 Pré-visualizar JSON
+      </button>
+      <pre id="json-preview"></pre>
+      <button type="button" class="btn btn-success" onclick="exportJSON()">
+        ⬇ Exportar onboarding.json
+      </button>
+      <button type="button" class="btn btn-primary" onclick="exportRegistryEntry()" style="justify-content:center;">
+        ⬇ Exportar entrada do clients_registry.json
+      </button>
+    </div>
+
+  </form>
+
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ─── Tags input ──────────────────────────────────────────────────────────────
+function initTagInput(containerId, inputId) {
+  const container = document.getElementById(containerId);
+  const inp = document.getElementById(inputId);
+  const tags = [];
+
+  function render() {
+    Array.from(container.querySelectorAll('.tag')).forEach(t => t.remove());
+    tags.forEach((tag, i) => {
+      const el = document.createElement('span');
+      el.className = 'tag';
+      el.innerHTML = `${tag} <span class="tag-x" data-i="${i}">×</span>`;
+      container.insertBefore(el, inp);
+    });
+  }
+
+  container.addEventListener('click', () => inp.focus());
+  inp.addEventListener('keydown', e => {
+    if ((e.key === 'Enter' || e.key === ',') && inp.value.trim()) {
+      e.preventDefault();
+      const val = inp.value.trim().replace(/,$/, '');
+      if (val && !tags.includes(val)) { tags.push(val); render(); }
+      inp.value = '';
+      updateProgress();
+    }
+    if (e.key === 'Backspace' && !inp.value && tags.length) {
+      tags.pop(); render(); updateProgress();
+    }
+  });
+  container.addEventListener('click', e => {
+    if (e.target.classList.contains('tag-x')) {
+      tags.splice(parseInt(e.target.dataset.i), 1);
+      render(); updateProgress();
+    }
+  });
+
+  return { getTags: () => [...tags], setTags: list => { tags.length = 0; list.forEach(t => tags.push(t)); render(); } };
+}
+
+const portaisCtrl     = initTagInput('portais-container',      'portais-input');
+const proibidasCtrl   = initTagInput('proibidas-container',    'proibidas-input');
+const financCtrl      = initTagInput('financiamento-container','financiamento-input');
+const garantiasCtrl   = initTagInput('garantias-container',    'garantias-input');
+
+// Inicializa defaults
+proibidasCtrl.setTags(['baratinho', 'promoção', 'urgente']);
+financCtrl.setTags(['Itaú BBA', 'Bradesco Prime', 'Santander Select', 'Caixa Econômica Federal']);
+portaisCtrl.setTags(['ZAP Imóveis', 'VivaReal', 'Site próprio']);
+
+// ─── Checkboxes estilizados ───────────────────────────────────────────────────
+document.querySelectorAll('.check-item input[type="checkbox"]').forEach(cb => {
+  function update() {
+    cb.closest('.check-item').classList.toggle('checked', cb.checked);
+  }
+  cb.addEventListener('change', () => { update(); updateProgress(); });
+  update();
+});
+
+// ─── Voz personalizada ────────────────────────────────────────────────────────
+document.getElementById('voice_id').addEventListener('change', function() {
+  document.getElementById('custom-voice-field').style.display =
+    this.value === 'custom' ? 'flex' : 'none';
+});
+
+// ─── Corretores dinâmicos ─────────────────────────────────────────────────────
+let corretorIdx = 0;
+function addCorretor(data = {}) {
+  const idx = corretorIdx++;
+  const div = document.createElement('div');
+  div.className = 'corretor-card';
+  div.id = `corretor-${idx}`;
+  div.innerHTML = `
+    <div class="card-title">Corretor ${idx + 1}</div>
+    ${idx > 0 ? `<button type="button" class="btn-remove" onclick="removeCorretor('corretor-${idx}')">Remover</button>` : ''}
+    <div class="grid-2">
+      <div class="field">
+        <label>Nome completo</label>
+        <input type="text" name="corretor_nome" placeholder="Ana Souza" value="${data.nome||''}">
+      </div>
+      <div class="field">
+        <label>WhatsApp</label>
+        <input type="text" name="corretor_telefone" placeholder="5511998000000" value="${data.telefone_whatsapp||''}">
+      </div>
+    </div>
+    <div class="grid-2" style="margin-top:12px;">
+      <div class="field">
+        <label>Especialidade</label>
+        <select name="corretor_especialidade">
+          <option ${data.especialidade?.includes('vendas')?'selected':''}>vendas</option>
+          <option ${data.especialidade?.includes('aluguel')?'selected':''}>aluguel</option>
+          <option ${data.especialidade?.includes('lancamentos')?'selected':''}>lancamentos</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Bairros / regiões</label>
+        <input type="text" name="corretor_bairros" placeholder="Jardins, Itaim, Moema" value="${(data.bairros_regioes||[]).join(', ')}">
+      </div>
+    </div>
+  `;
+  document.getElementById('corretores-list').appendChild(div);
+}
+function removeCorretor(id) {
+  document.getElementById(id)?.remove();
+  updateProgress();
+}
+addCorretor(); // inicia com 1
+
+// ─── Progress ─────────────────────────────────────────────────────────────────
+function countFilled() {
+  const required = ['client_id','nome_imobiliaria','cidade_atuacao','nome_consultor',
+                    'corretor_number','evolution_instance','portfolio_path'];
+  const filled = required.filter(id => document.getElementById(id)?.value?.trim()).length;
+  const segs = document.querySelectorAll('#segmentos-group input:checked').length;
+  return Math.min(100, Math.round(((filled + Math.min(segs, 1)) / (required.length + 1)) * 100));
+}
+function updateProgress() {
+  document.getElementById('progress-fill').style.width = countFilled() + '%';
+}
+document.querySelectorAll('input,select,textarea').forEach(el =>
+  el.addEventListener('input', updateProgress)
+);
+
+// ─── Collect data ─────────────────────────────────────────────────────────────
+function getVoiceId() {
+  const sel = document.getElementById('voice_id').value;
+  if (sel === 'custom') return document.getElementById('custom_voice_id').value.trim() || sel;
+  return sel;
+}
+
+function getCorretores() {
+  return Array.from(document.querySelectorAll('.corretor-card')).map(card => ({
+    nome:              card.querySelector('[name="corretor_nome"]').value.trim(),
+    telefone_whatsapp: card.querySelector('[name="corretor_telefone"]').value.trim(),
+    especialidade:     [card.querySelector('[name="corretor_especialidade"]').value],
+    bairros_regioes:   card.querySelector('[name="corretor_bairros"]').value
+                           .split(',').map(s => s.trim()).filter(Boolean),
+    horario_inicio:    "09:00",
+    horario_fim:       "19:00",
+    dias_atendimento:  ["seg","ter","qua","qui","sex","sab"],
+  })).filter(c => c.nome || c.telefone_whatsapp);
+}
+
+function getSegmentos() {
+  return Array.from(document.querySelectorAll('#segmentos-group input:checked'))
+    .map(cb => cb.value);
+}
+
+function buildOnboarding() {
+  const clientId = document.getElementById('client_id').value.trim();
+  const nomeCons  = document.getElementById('nome_consultor').value.trim() || 'Sofia';
+  const nomeImob  = document.getElementById('nome_imobiliaria').value.trim();
+  const portfolioFile = document.getElementById('portfolio_path').value.trim();
+
+  return {
+    client_id:        clientId,
+    versao_schema:    "1.0",
+    imobiliaria: {
+      nome_imobiliaria:      nomeImob,
+      cidade_atuacao:        document.getElementById('cidade_atuacao').value.trim(),
+      segmentos:             getSegmentos(),
+      site:                  document.getElementById('site').value.trim() || null,
+      portais_anuncio:       portaisCtrl.getTags(),
+      ticket_medio_vendas:   parseFloatOrNull(document.getElementById('ticket_vendas').value),
+      ticket_medio_aluguel:  parseFloatOrNull(document.getElementById('ticket_aluguel').value),
+      ticket_medio_temporada: null,
+    },
+    consultor: {
+      nome:       nomeCons,
+      voice_id:   getVoiceId(),
+      tipo_atuacao: document.getElementById('tipo_atuacao').value.trim() || 'imóveis de alto padrão',
+      palavras_proibidas: proibidasCtrl.getTags(),
+    },
+    portfolio: {
+      portfolio_path:         portfolioFile ? `clients/${clientId}/${portfolioFile}` : null,
+      portfolio_url:          null,
+      total_imoveis_estimado: parseFloatOrNull(document.getElementById('total_imoveis').value),
+    },
+    corretores: getCorretores(),
+    notificacoes: {
+      corretor_number:          document.getElementById('corretor_number').value.trim(),
+      corretor_score_threshold: parseInt(document.getElementById('corretor_threshold').value) || 8,
+      corretor_cooldown_hours:  parseInt(document.getElementById('corretor_cooldown').value) || 24,
+    },
+    regras: {
+      pode_falar_desconto:     document.getElementById('pode_desconto').value === 'true',
+      desconto_maximo_percent: parseFloat(document.getElementById('desconto_max').value) || 3,
+      parceiros_financiamento: financCtrl.getTags(),
+      garantias_aceitas_aluguel: garantiasCtrl.getTags(),
+      regras_adicionais: document.getElementById('regras_adicionais').value
+                          .split('\n').map(s => s.trim()).filter(Boolean),
+    },
+    horarios: {
+      horario_inicio:   document.getElementById('horario_inicio').value || '08:00',
+      horario_fim:      document.getElementById('horario_fim').value || '20:00',
+      atende_sabado:    document.getElementById('atende_sabado').checked,
+      atende_domingo:   document.getElementById('atende_domingo').checked,
+      feriados_nacionais: true,
+      feriados_locais:  [],
+      comportamento_fora_horario: 'informar_horario_e_registrar_lead',
+      mensagem_fora_horario: document.getElementById('msg_fora_horario').value.trim(),
+    },
+    crm: {
+      crm_nome:        document.getElementById('crm_nome').value || null,
+      crm_webhook_url: document.getElementById('crm_webhook').value.trim() || null,
+      crm_api_key:     null,
+      campos_customizados: {},
+    },
+    whatsapp: {
+      evolution_instance: document.getElementById('evolution_instance').value.trim(),
+      numero:             document.getElementById('whatsapp_number').value.trim() || null,
+    },
+    dashboard: {
+      usuarios_dashboard: document.getElementById('email_gestor').value.trim()
+                          ? [document.getElementById('email_gestor').value.trim()] : [],
+      relatorio_semanal:  document.getElementById('relatorio_semanal').value === 'true',
+      email_relatorio:    document.getElementById('email_gestor').value.trim() || null,
+      metricas_prioritarias: [
+        "leads_atendidos","taxa_qualificacao","score_medio_intencao",
+        "agendamentos_realizados","tempo_medio_resposta","conversao_visita"
+      ],
+    },
+    escalacao: {
+      gatilhos_escalacao: [
+        "Lead solicita falar diretamente com um corretor",
+        "Lead demonstra insatisfação ou impaciência",
+        "Score de intenção acima de 15 em uma única conversa",
+      ],
+      mensagem_transferencia: `Entendido! Vou conectar você com um de nossos especialistas. Em breve ele entrará em contato pelo WhatsApp. Obrigada!`,
+      canal_alerta_operador:  "whatsapp",
+      contato_alerta:         document.getElementById('corretor_number').value.trim(),
+      escalar_apos_n_mensagens_sem_resolucao: 6,
+    },
+    midia: {
+      foto_config:    "4_fotos_mais_link",
+      max_fotos_envio: 4,
+      mensagem_link:  "Veja todas as fotos e detalhes completos do imóvel em nosso site:",
+    },
+  };
+}
+
+function buildRegistryEntry(onboarding) {
+  const clientId = onboarding.client_id;
+  const instance = onboarding.whatsapp?.evolution_instance || '';
+  return {
+    [instance || `instancia_${clientId}`]: {
+      client_id:                clientId,
+      evolution_instance:       instance,
+      nome_consultor:           onboarding.consultor?.nome || 'Sofia',
+      nome_imobiliaria:         onboarding.imobiliaria?.nome_imobiliaria || '',
+      cidade_atuacao:           onboarding.imobiliaria?.cidade_atuacao || '',
+      tipo_atuacao:             onboarding.consultor?.tipo_atuacao || 'imóveis',
+      palavras_proibidas:       (onboarding.consultor?.palavras_proibidas || []).join(', '),
+      corretor_number:          onboarding.notificacoes?.corretor_number || '',
+      corretor_score_threshold: onboarding.notificacoes?.corretor_score_threshold ?? 8,
+      corretor_cooldown_hours:  onboarding.notificacoes?.corretor_cooldown_hours ?? 24,
+      elevenlabs_voice_id:      onboarding.consultor?.voice_id || 'EXAVITQu4vr4xnSDxMaL',
+      onboarding_path:          `clients/${clientId}/onboarding.json`,
+    }
+  };
+}
+
+function parseFloatOrNull(v) {
+  const n = parseFloat(v);
+  return isNaN(n) ? null : n;
+}
+
+// ─── Export ───────────────────────────────────────────────────────────────────
+function validate() {
+  const required = {
+    client_id: 'ID do cliente',
+    nome_imobiliaria: 'Nome da imobiliária',
+    cidade_atuacao: 'Cidade',
+    nome_consultor: 'Nome do consultor',
+    corretor_number: 'Número do corretor',
+    evolution_instance: 'Instância Evolution',
+    portfolio_path: 'Arquivo CSV do portfólio',
+  };
+  for (const [id, label] of Object.entries(required)) {
+    if (!document.getElementById(id)?.value?.trim()) {
+      showToast(`⚠️ Campo obrigatório: ${label}`, '#ef4444');
+      document.getElementById(id)?.focus();
+      return false;
+    }
+  }
+  if (getSegmentos().length === 0) {
+    showToast('⚠️ Selecione pelo menos um segmento', '#ef4444');
+    return false;
+  }
+  return true;
+}
+
+function exportJSON() {
+  if (!validate()) return;
+  const data = buildOnboarding();
+  downloadJSON(data, `onboarding_${data.client_id}.json`);
+  showToast('✅ onboarding.json exportado!');
+}
+
+function exportRegistryEntry() {
+  if (!validate()) return;
+  const onboarding = buildOnboarding();
+  const entry = buildRegistryEntry(onboarding);
+  downloadJSON(entry, `registry_entry_${onboarding.client_id}.json`);
+  showToast('✅ Entrada do registry exportada! Adicione ao clients_registry.json no servidor.');
+}
+
+function downloadJSON(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function togglePreview() {
+  const pre = document.getElementById('json-preview');
+  if (pre.style.display === 'block') {
+    pre.style.display = 'none';
+    return;
+  }
+  try {
+    const data = buildOnboarding();
+    pre.textContent = JSON.stringify(data, null, 2);
+    pre.style.display = 'block';
+  } catch (e) {
+    pre.textContent = 'Erro ao gerar preview: ' + e.message;
+    pre.style.display = 'block';
+  }
+}
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+function showToast(msg, bg = 'var(--success)') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = bg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+// Init
+updateProgress();
+</script>
+</body>
+</html>

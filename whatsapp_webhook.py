@@ -24,6 +24,7 @@ Persistência:
 
 import asyncio
 import base64
+import contextvars
 import csv
 import json
 import logging
@@ -67,6 +68,156 @@ CORRETOR_NUMBER          = os.getenv("CORRETOR_NUMBER", "")          # ex: 55119
 CORRETOR_SCORE_THRESHOLD = int(os.getenv("CORRETOR_SCORE_THRESHOLD", "8"))
 CORRETOR_COOLDOWN_HOURS  = int(os.getenv("CORRETOR_COOLDOWN_HOURS", "24"))
 
+# ─── Multi-tenant — context por request ─────────────────────────────────────
+# Cada request carrega o contexto do cliente (instância Evolution → config).
+# _client_ctx é copiado automaticamente para tasks/executors por asyncio (Py 3.9+).
+_client_ctx: contextvars.ContextVar[dict] = contextvars.ContextVar("client_ctx", default={})
+
+
+def _ctx_client_id() -> str:
+    return _client_ctx.get().get("client_id", CLIENT_ID)
+
+
+def _ctx_instance() -> str:
+    return _client_ctx.get().get("evolution_instance", EVOLUTION_INSTANCE)
+
+
+def _ctx_system_prompt() -> str:
+    return _client_ctx.get().get("system_prompt", SYSTEM_PROMPT)
+
+
+def _ctx_corretor_number() -> str:
+    return _client_ctx.get().get("corretor_number", CORRETOR_NUMBER)
+
+
+def _ctx_corretor_threshold() -> int:
+    return int(_client_ctx.get().get("corretor_score_threshold", CORRETOR_SCORE_THRESHOLD))
+
+
+def _ctx_corretor_cooldown() -> int:
+    return int(_client_ctx.get().get("corretor_cooldown_hours", CORRETOR_COOLDOWN_HOURS))
+
+
+def _ctx_voice_id() -> str:
+    return _client_ctx.get().get("elevenlabs_voice_id", ELEVENLABS_VOICE_ID)
+
+
+# ─── Registry de clientes (instance_name → config) ───────────────────────────
+_CLIENTS_REGISTRY: dict[str, dict] = {}
+_client_context_cache: dict[str, dict] = {}  # system_prompt cacheado por client_id
+
+
+def _load_clients_registry() -> dict[str, dict]:
+    """
+    Carrega clients_registry.json.
+    Formato: { "nome_instancia_evolution": { "client_id": ..., "nome_consultor": ..., ... } }
+    Se não encontrado, retorna mapa com a instância demo configurada via env vars.
+    """
+    candidates = [
+        Path("/opt/ImobOne-v2/clients_registry.json"),
+        Path(__file__).parent / "clients_registry.json",
+    ]
+    for p in candidates:
+        if p.exists():
+            try:
+                raw = json.loads(p.read_text(encoding="utf-8"))
+                # Filtra metadados (chaves começando com _)
+                data = {k: v for k, v in raw.items() if not k.startswith("_")}
+                log.info("clients_registry.json carregado: %d cliente(s) de %s", len(data), p)
+                return data
+            except Exception as e:
+                log.warning("Erro ao carregar clients_registry.json: %s", e)
+    # Fallback: instância demo a partir de env vars
+    log.info("clients_registry.json não encontrado — usando config demo via env vars.")
+    return {
+        EVOLUTION_INSTANCE: {
+            "client_id":                  CLIENT_ID,
+            "evolution_instance":         EVOLUTION_INSTANCE,
+            "nome_consultor":             "Sofia",
+            "nome_imobiliaria":           "Ávora Imóveis",
+            "cidade_atuacao":             "São Paulo",
+            "tipo_atuacao":               "vendas de alto padrão",
+            "palavras_proibidas":         "baratinho, promoção, urgente",
+            "corretor_number":            CORRETOR_NUMBER,
+            "corretor_score_threshold":   CORRETOR_SCORE_THRESHOLD,
+            "corretor_cooldown_hours":    CORRETOR_COOLDOWN_HOURS,
+            "elevenlabs_voice_id":        ELEVENLABS_VOICE_ID,
+        }
+    }
+
+
+def _build_client_context(instance: str) -> dict:
+    """
+    Resolve e cacheia o contexto completo de um cliente pela instância Evolution.
+    Se a instância não estiver no registry, usa a instância demo como fallback.
+    O system_prompt é construído uma vez por client_id e cacheado em _client_context_cache.
+    """
+    cfg = _CLIENTS_REGISTRY.get(instance)
+    if not cfg:
+        log.warning("Instância '%s' não encontrada no registry — fallback para demo.", instance)
+        # Pega o primeiro cliente disponível (normalmente o demo)
+        cfg = next(iter(_CLIENTS_REGISTRY.values()), {})
+
+    # Garante que evolution_instance está no config
+    cfg = {**cfg, "evolution_instance": instance}
+    client_id = cfg.get("client_id", CLIENT_ID)
+
+    # Retorna do cache se já construído
+    if client_id in _client_context_cache:
+        return {**cfg, "system_prompt": _client_context_cache[client_id]}
+
+    # Constrói system prompt para esse cliente
+    nome_consultor     = cfg.get("nome_consultor",    "Sofia")
+    nome_imobiliaria   = cfg.get("nome_imobiliaria",  "Imobiliária")
+    cidade             = cfg.get("cidade_atuacao",    "São Paulo")
+    tipo_atuacao       = cfg.get("tipo_atuacao",      "imóveis")
+    palavras_proibidas = cfg.get("palavras_proibidas", "")
+
+    # Carrega portfólio deste cliente
+    portfolio_ctx = ""
+    try:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent))
+        from setup_pipeline import _build_portfolio_context, carregar_onboarding
+        onboarding_data = carregar_onboarding(client_id)
+        portfolio_ctx   = _build_portfolio_context(onboarding_data)
+        log.info("Portfólio carregado para cliente '%s' (%d chars)", client_id, len(portfolio_ctx))
+    except Exception as e:
+        log.warning("Portfólio não carregado para '%s': %s", client_id, e)
+
+    # Carrega prompt base e substitui variáveis
+    prompt_candidates = [
+        Path("/app/prompts/base/consultant_base.md"),
+        Path(__file__).parent / "_prompts_build" / "consultant_base.md",
+        Path(__file__).parent / "prompts" / "base" / "consultant_base.md",
+    ]
+    system_prompt = None
+    for c in prompt_candidates:
+        if c.exists():
+            raw = c.read_text(encoding="utf-8")
+            system_prompt = (raw
+                .replace("{{NOME_CONSULTOR}}",   nome_consultor)
+                .replace("{{NOME_IMOBILIARIA}}", nome_imobiliaria)
+                .replace("{{CIDADE_ATUACAO}}",   cidade)
+                .replace("{{TIPO_ATUACAO}}",     tipo_atuacao)
+                .replace("{{PALAVRAS_PROIBIDAS}}", palavras_proibidas)
+                .replace("{{EXEMPLOS_SAUDACAO}}", "Boa tarde, seja bem-vindo.")
+                .replace("{{REGRAS_ESPECIFICAS}}", "")
+                .replace("{{PORTFOLIO_CONTEXTO}}", portfolio_ctx)
+            )
+            break
+
+    if not system_prompt:
+        system_prompt = (
+            f"Você é {nome_consultor}, consultora de imóveis de alto padrão da "
+            f"{nome_imobiliaria} em {cidade}. Responda com sofisticação e precisão."
+        )
+
+    _client_context_cache[client_id] = system_prompt
+    log.info("Contexto construído para cliente '%s' (instância: %s)", client_id, instance)
+    return {**cfg, "system_prompt": system_prompt}
+
+
 # ─── Score de intenção — sinais e pontuação ──────────────────────────────────
 # Cada tupla: (regex_pattern, pontos, label_para_breakdown)
 _SCORE_SIGNALS: list[tuple[str, int, str]] = [
@@ -106,7 +257,7 @@ def _load_portfolio_dict() -> dict[str, dict]:
         import sys
         sys.path.insert(0, str(Path(__file__).parent))
         from setup_pipeline import carregar_onboarding
-        onboarding = carregar_onboarding(CLIENT_ID)
+        onboarding = carregar_onboarding(_ctx_client_id())
         portfolio_path = (
             onboarding.get("portfolio_path", "")
             or onboarding.get("portfolio", {}).get("portfolio_path", "")
@@ -137,7 +288,7 @@ def _load_onboarding_config() -> dict:
         import sys
         sys.path.insert(0, str(Path(__file__).parent))
         from setup_pipeline import carregar_onboarding
-        return carregar_onboarding(CLIENT_ID)
+        return carregar_onboarding(_ctx_client_id())
     except Exception as e:
         log.warning("Não foi possível carregar onboarding: %s", e)
         return {}
@@ -150,7 +301,7 @@ def _load_portfolio_context() -> str:
         import sys
         sys.path.insert(0, str(Path(__file__).parent))
         from setup_pipeline import _build_portfolio_context, carregar_onboarding
-        onboarding = carregar_onboarding(CLIENT_ID)
+        onboarding = carregar_onboarding(_ctx_client_id())
         ctx = _build_portfolio_context(onboarding)
         log.info("Portfólio carregado via setup_pipeline.")
         return ctx
@@ -185,7 +336,8 @@ def _load_system_prompt() -> str:
 
 SYSTEM_PROMPT = _load_system_prompt()
 ONBOARDING    = _load_onboarding_config()
-_load_portfolio_dict()   # pré-carrega
+_load_portfolio_dict()        # pré-carrega portfólio demo
+_CLIENTS_REGISTRY.update(_load_clients_registry())  # carrega registry multi-tenant
 
 
 # ─── Histórico de conversa ────────────────────────────────────────────────────
@@ -252,7 +404,7 @@ async def _supabase_upsert_lead(sender: str, name: str | None = None):
     try:
         loop = asyncio.get_event_loop()
         data = {
-            "client_id":        CLIENT_ID,
+            "client_id":        _ctx_client_id(),
             "lead_phone":       sender,
             "ultima_interacao": "now()",
             "origem":           "whatsapp",
@@ -280,7 +432,7 @@ async def _supabase_append_conversa(sender: str, role: str, content: str, media_
         await loop.run_in_executor(None, lambda: (
             sb.table("conversas")
               .insert({
-                  "client_id":  CLIENT_ID,
+                  "client_id":  _ctx_client_id(),
                   "lead_phone": sender,
                   "role":       role,
                   "content":    content[:4000],  # trunca mensagens muito longas
@@ -340,7 +492,7 @@ async def _supabase_mark_descartado(sender: str, motivo: str):
         await loop.run_in_executor(None, lambda: (
             sb.table("leads")
               .upsert({
-                  "client_id":       CLIENT_ID,
+                  "client_id":       _ctx_client_id(),
                   "lead_phone":      sender,
                   "descartado":      True,
                   "descartado_em":   datetime.now(timezone.utc).isoformat(),
@@ -369,7 +521,7 @@ async def _supabase_confirm_visit(sender: str):
         await loop.run_in_executor(None, lambda: (
             sb.table("leads")
               .upsert({
-                  "client_id":             CLIENT_ID,
+                  "client_id":             _ctx_client_id(),
                   "lead_phone":            sender,
                   "visita_agendada":       True,
                   "visita_confirmada_at":  datetime.now(timezone.utc).isoformat(),
@@ -464,7 +616,7 @@ async def _supabase_update_score(
     try:
         loop = asyncio.get_event_loop()
         data: dict = {
-            "client_id":       CLIENT_ID,
+            "client_id":       _ctx_client_id(),
             "lead_phone":      sender,
             "intention_score": score,
             "score_breakdown": breakdown,
@@ -491,9 +643,9 @@ async def _should_notify_corretor(sender: str, score: int) -> bool:
     Verifica se o corretor deve ser notificado.
     Condições: score >= threshold E cooldown expirado E número configurado.
     """
-    if not CORRETOR_NUMBER:
+    if not _ctx_corretor_number():
         return False
-    if score < CORRETOR_SCORE_THRESHOLD:
+    if score < _ctx_corretor_threshold():
         return False
     # Verifica cooldown (Redis TTL)
     cooldown_key = f"whatsapp:corretor_notified:{sender}"
@@ -569,7 +721,8 @@ async def _notify_corretor(
     Envia alerta ao corretor via WhatsApp quando lead atinge threshold de intenção.
     Inclui resumo estratégico da conversa gerado por IA (Claude Haiku).
     """
-    if not CORRETOR_NUMBER:
+    corretor_num = _ctx_corretor_number()
+    if not corretor_num:
         return
 
     nome_display = lead_name or "não identificado"
@@ -592,12 +745,12 @@ async def _notify_corretor(
     )
 
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, send_whatsapp_message, CORRETOR_NUMBER, msg)
+    await loop.run_in_executor(None, send_whatsapp_message, corretor_num, msg)
     log.info("Corretor notificado sobre lead %s (score=%d, resumo gerado)", sender, score)
 
     # Marca cooldown no Redis
     cooldown_key = f"whatsapp:corretor_notified:{sender}"
-    cooldown_secs = CORRETOR_COOLDOWN_HOURS * 3600
+    cooldown_secs = _ctx_corretor_cooldown() * 3600
     if redis_client:
         try:
             await redis_client.set(cooldown_key, "1", ex=cooldown_secs)
@@ -629,7 +782,7 @@ def _generate_audio_ptt(text: str) -> bytes | None:
     }).encode()
 
     req = urllib.request.Request(
-        f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
+        f"https://api.elevenlabs.io/v1/text-to-speech/{_ctx_voice_id()}",
         data=payload,
         headers={
             "xi-api-key":   ELEVENLABS_API_KEY,
@@ -658,7 +811,7 @@ def _send_audio_ptt(to: str, audio_bytes: bytes):
         "ptt":       True,
     }).encode()
     req = urllib.request.Request(
-        f"{EVOLUTION_URL}/message/sendWhatsAppAudio/{EVOLUTION_INSTANCE}",
+        f"{EVOLUTION_URL}/message/sendWhatsAppAudio/{_ctx_instance()}",
         data=payload,
         headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
         method="POST",
@@ -689,7 +842,7 @@ def _fetch_media_base64(message_key: dict, convert_to_mp4: bool = False) -> tupl
         "convertToMp4": convert_to_mp4,
     }).encode()
     req = urllib.request.Request(
-        f"{EVOLUTION_URL}/chat/getBase64FromMediaMessage/{EVOLUTION_INSTANCE}",
+        f"{EVOLUTION_URL}/chat/getBase64FromMediaMessage/{_ctx_instance()}",
         data=payload,
         headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
         method="POST",
@@ -828,7 +981,7 @@ async def run_consultant(history: list[dict], user_message: str) -> str:
         f"HOJE É: {data_hoje}\n"
         f"Ao confirmar ou sugerir datas de visita, calcule sempre a partir dessa data. "
         f"Nunca invente datas. Use o dia da semana + data completa (ex: terça-feira, 31 de março de 2026).\n\n"
-        + SYSTEM_PROMPT
+        + _ctx_system_prompt()
     )
 
     try:
@@ -849,7 +1002,7 @@ def send_whatsapp_message(to: str, text: str):
     """Envia mensagem de texto via Evolution API (síncrono)."""
     payload = json.dumps({"number": to, "text": text}).encode()
     req = urllib.request.Request(
-        f"{EVOLUTION_URL}/message/sendText/{EVOLUTION_INSTANCE}",
+        f"{EVOLUTION_URL}/message/sendText/{_ctx_instance()}",
         data=payload,
         headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
         method="POST",
@@ -871,7 +1024,7 @@ def send_whatsapp_media(to: str, media_url: str, caption: str = ""):
         "caption": caption,
     }).encode()
     req = urllib.request.Request(
-        f"{EVOLUTION_URL}/message/sendMedia/{EVOLUTION_INSTANCE}",
+        f"{EVOLUTION_URL}/message/sendMedia/{_ctx_instance()}",
         data=payload,
         headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
         method="POST",
@@ -991,8 +1144,9 @@ app = FastAPI(title="ImobOne WhatsApp Webhook", lifespan=lifespan)
 async def health():
     return {
         "status":              "ok",
-        "instance":            EVOLUTION_INSTANCE,
-        "client":              CLIENT_ID,
+        "clients_registered":  list(_CLIENTS_REGISTRY.keys()),
+        "default_instance":    EVOLUTION_INSTANCE,
+        "default_client":      CLIENT_ID,
         "portfolio_size":      len(_portfolio_cache),
         "foto_config":         ONBOARDING.get("midia", {}).get("foto_config", "não configurado"),
         "audio_transcription": bool(OPENAI_API_KEY),
@@ -1022,6 +1176,11 @@ async def webhook(request: Request):
 
     if data.get("key", {}).get("fromMe"):
         return Response(status_code=200)
+
+    # ── Resolve contexto do cliente pela instância Evolution ─────────────────
+    instance = body.get("instance", EVOLUTION_INSTANCE)
+    client_context = _build_client_context(instance)
+    _client_ctx.set(client_context)
 
     remote_jid = data.get("key", {}).get("remoteJid", "")
     if "@g.us" in remote_jid:
@@ -1261,29 +1420,35 @@ async def new_property_endpoint(request: Request):
         _portfolio_cache[imovel_id] = imovel
 
     # Dispara o engine em background — não bloqueia o response
+    # Captura valores do contexto antes de passar para o executor (thread pool não herda contextvars)
+    _client_id_snap = _ctx_client_id()
+    _instance_snap  = _ctx_instance()
+    _ctx_snap       = _client_ctx.get({})
+
     loop = asyncio.get_event_loop()
     asyncio.create_task(
-        loop.run_in_executor(None, _run_new_property_engine, imovel)
+        loop.run_in_executor(None, _run_new_property_engine, imovel, _client_id_snap, _instance_snap, _ctx_snap)
     )
 
     return {"status": "triggered", "imovel_id": imovel_id}
 
 
-def _run_new_property_engine(imovel: dict):
+def _run_new_property_engine(imovel: dict, client_id: str, instance: str, ctx: dict):
     """Chama o followup_engine no mesmo processo para evitar cold-start."""
     try:
         import sys as _sys
         _sys.path.insert(0, str(Path(__file__).parent))
         import followup_engine as fe
-        fe.CLIENT_ID          = CLIENT_ID
-        fe.CONSULTANT_NAME    = ONBOARDING.get("consultor", {}).get("nome", "Sofia")
-        fe.IMOBILIARIA_NAME   = ONBOARDING.get("nome_imobiliaria", "Ávora Imóveis")
+        onboarding_data = ONBOARDING if client_id == CLIENT_ID else {}
+        fe.CLIENT_ID          = client_id
+        fe.CONSULTANT_NAME    = ctx.get("nome_consultor") or onboarding_data.get("consultor", {}).get("nome", "Sofia")
+        fe.IMOBILIARIA_NAME   = ctx.get("nome_imobiliaria") or onboarding_data.get("nome_imobiliaria", "Imobiliária")
         fe.ANTHROPIC_API_KEY  = ANTHROPIC_API_KEY
         fe.SUPABASE_URL       = SUPABASE_URL
         fe.SUPABASE_KEY       = SUPABASE_KEY
         fe.EVOLUTION_URL      = EVOLUTION_URL
         fe.EVOLUTION_API_KEY  = EVOLUTION_API_KEY
-        fe.EVOLUTION_INSTANCE = EVOLUTION_INSTANCE
+        fe.EVOLUTION_INSTANCE = instance
         fe.process_new_property(imovel)
     except Exception as e:
         log.error("Erro no new-property engine: %s", e)
