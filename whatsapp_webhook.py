@@ -396,6 +396,112 @@ def _get_supabase():
         return None
 
 
+
+# ─── Human takeover — Redis helpers ──────────────────────────────────────────
+
+def _human_mode_key(sender: str) -> str:
+    """Chave Redis para estado de human mode deste lead."""
+    return f"whatsapp:human_mode:{_ctx_client_id()}:{sender}"
+
+
+async def _is_human_mode(sender: str) -> bool:
+    """Verifica se um lead está em modo humano (operador assumiu)."""
+    if redis_client:
+        try:
+            return bool(await redis_client.exists(_human_mode_key(sender)))
+        except Exception:
+            pass
+    return False
+
+
+async def _set_human_mode(sender: str, active: bool, operator: str = "", note: str = ""):
+    """
+    Ativa ou desativa o human mode para um lead.
+    - active=True: Sofia fica em silêncio, TTL de HUMAN_MODE_TTL_HOURS horas
+    - active=False: Sofia retoma, chave Redis removida
+    """
+    key = _human_mode_key(sender)
+    if redis_client:
+        try:
+            if active:
+                ttl_seconds = HUMAN_MODE_TTL_HOURS * 3600
+                await redis_client.setex(key, ttl_seconds, operator or "operador")
+            else:
+                await redis_client.delete(key)
+        except Exception as e:
+            log.warning("Falha ao setar human_mode Redis para %s: %s", sender, e)
+
+    # Persiste no Supabase (visibilidade no dashboard)
+    sb = _get_supabase()
+    if sb:
+        try:
+            from datetime import datetime, timezone
+            loop = asyncio.get_event_loop()
+            data = {
+                "client_id":    _ctx_client_id(),
+                "lead_phone":   sender,
+                "human_mode":   active,
+            }
+            if active:
+                data["human_mode_at"]   = datetime.now(timezone.utc).isoformat()
+                data["human_mode_by"]   = operator or "operador"
+                data["human_mode_note"] = note or None
+            else:
+                data["human_mode_at"]   = None
+                data["human_mode_by"]   = None
+                data["human_mode_note"] = None
+
+            await loop.run_in_executor(None, lambda: (
+                sb.table("leads")
+                  .upsert(data, on_conflict="client_id,lead_phone")
+                  .execute()
+            ))
+
+            # Registra na auditoria
+            action = "take" if active else "release"
+            triggered = "api"
+            await loop.run_in_executor(None, lambda: (
+                sb.table("human_takeover_log")
+                  .insert({
+                      "client_id":    _ctx_client_id(),
+                      "lead_phone":   sender,
+                      "action":       action,
+                      "triggered_by": triggered,
+                      "operator":     operator or "operador",
+                      "note":         note or None,
+                  })
+                  .execute()
+            ))
+
+            action_label = "assumida" if active else "devolvida"
+            log.info("Conversa %s %s pelo operador %s", sender, action_label, operator or "?")
+        except Exception as e:
+            log.warning("Falha ao persistir human_mode Supabase para %s: %s", sender, e)
+
+
+async def _set_human_mode_triggered_by(sender: str, active: bool, triggered_by: str,
+                                        operator: str = "", note: str = ""):
+    """Versão com triggered_by explícito para log de auditoria."""
+    await _set_human_mode(sender, active, operator, note)
+    # Atualiza o triggered_by no log de auditoria (último registro)
+    sb = _get_supabase()
+    if sb and triggered_by != "api":
+        try:
+            loop = asyncio.get_event_loop()
+            # Busca o registro mais recente e atualiza
+            await loop.run_in_executor(None, lambda: (
+                sb.table("human_takeover_log")
+                  .update({"triggered_by": triggered_by})
+                  .eq("client_id", _ctx_client_id())
+                  .eq("lead_phone", sender)
+                  .order("created_at", desc=True)
+                  .limit(1)
+                  .execute()
+            ))
+        except Exception:
+            pass
+
+
 async def _supabase_upsert_lead(sender: str, name: str | None = None):
     """Cria ou atualiza registro do lead no Supabase."""
     sb = _get_supabase()
@@ -1460,6 +1566,132 @@ async def _marcar_fotos_enviadas(sender: str, imovel_id: str):
 
 
 # ─── Pipeline principal — com lock por sender ─────────────────────────────────
+
+# ─── Comandos de operador via WhatsApp ───────────────────────────────────────
+# O corretor envia para o número da Sofia:
+#   #assumir 5511999998888         → ativa human mode para esse lead
+#   #assumir 5511999998888 motivo  → com nota opcional
+#   #devolver 5511999998888        → devolve para Sofia
+#   #status 5511999998888          → verifica se está em human mode
+#   #leads                         → lista leads quentes
+
+_OPERATOR_CMD_RE = re.compile(
+    r'^#(assumir|devolver|status|leads)\s*(\d{10,15})?\s*(.*)?$',
+    re.IGNORECASE
+)
+
+
+async def _handle_operator_command(operator_phone: str, text: str) -> bool:
+    """
+    Processa comandos do operador enviados via WhatsApp.
+    Retorna True se era um comando (e foi processado), False caso contrário.
+    """
+    text_stripped = text.strip()
+    if not text_stripped.startswith('#'):
+        return False
+
+    m = _OPERATOR_CMD_RE.match(text_stripped)
+    if not m:
+        return False
+
+    cmd, lead_phone, note = m.groups()
+    cmd = cmd.lower()
+    note = (note or "").strip()
+
+    loop = asyncio.get_event_loop()
+
+    if cmd == "assumir":
+        if not lead_phone:
+            await loop.run_in_executor(None, send_whatsapp_message,
+                operator_phone,
+                "Formato: #assumir 5511999998888 [motivo opcional]"
+            )
+            return True
+        await _set_human_mode_triggered_by(
+            lead_phone, True,
+            triggered_by="whatsapp_command",
+            operator=operator_phone,
+            note=note or "Assumido via WhatsApp"
+        )
+        # Renova TTL no Redis com triggered_by correto
+        if redis_client:
+            try:
+                key = f"whatsapp:human_mode:{_ctx_client_id()}:{lead_phone}"
+                await redis_client.setex(key, HUMAN_MODE_TTL_HOURS * 3600, operator_phone)
+            except Exception:
+                pass
+        await loop.run_in_executor(None, send_whatsapp_message,
+            operator_phone,
+            f"Conversa com {lead_phone} assumida. Sofia em silencio por ate {HUMAN_MODE_TTL_HOURS}h. "
+            f"Envie #devolver {lead_phone} para reativar."
+        )
+        log.info("[CMD] Operador %s assumiu conversa com %s", operator_phone, lead_phone)
+        return True
+
+    elif cmd == "devolver":
+        if not lead_phone:
+            await loop.run_in_executor(None, send_whatsapp_message,
+                operator_phone, "Formato: #devolver 5511999998888"
+            )
+            return True
+        await _set_human_mode_triggered_by(
+            lead_phone, False,
+            triggered_by="whatsapp_command",
+            operator=operator_phone,
+            note="Devolvido para Sofia via WhatsApp"
+        )
+        await loop.run_in_executor(None, send_whatsapp_message,
+            operator_phone,
+            f"Sofia reativada para {lead_phone}."
+        )
+        log.info("[CMD] Operador %s devolveu conversa com %s para Sofia", operator_phone, lead_phone)
+        return True
+
+    elif cmd == "status":
+        if not lead_phone:
+            await loop.run_in_executor(None, send_whatsapp_message,
+                operator_phone, "Formato: #status 5511999998888"
+            )
+            return True
+        human = await _is_human_mode(lead_phone)
+        status_text = f"{lead_phone}: {'HUMANO (Sofia em silencio)' if human else 'SOFIA (automatico)'}"
+        await loop.run_in_executor(None, send_whatsapp_message, operator_phone, status_text)
+        return True
+
+    elif cmd == "leads":
+        # Lista top 5 leads quentes não em human mode
+        sb = _get_supabase()
+        if sb:
+            try:
+                result = await asyncio.get_event_loop().run_in_executor(None, lambda: (
+                    sb.table("leads")
+                      .select("lead_phone,lead_name,intention_score")
+                      .eq("client_id", _ctx_client_id())
+                      .eq("descartado", False)
+                      .gte("intention_score", 5)
+                      .order("intention_score", desc=True)
+                      .limit(5)
+                      .execute()
+                ))
+                leads_list = result.data or []
+                if leads_list:
+                    lines = ["Leads quentes:"]
+                    for l in leads_list:
+                        name  = l.get("lead_name") or "?"
+                        phone = l.get("lead_phone", "")[-8:] + "..."
+                        score = l.get("intention_score", 0)
+                        lines.append(f"  {name} ({phone}) score {score}")
+                    msg = "\n".join(lines)
+                else:
+                    msg = "Nenhum lead quente no momento."
+                await loop.run_in_executor(None, send_whatsapp_message, operator_phone, msg)
+            except Exception as e:
+                log.warning("Falha ao buscar leads para comando #leads: %s", e)
+        return True
+
+    return False
+
+
 async def _process_media_and_reply(sender: str, text: str, media_info: dict | None):
     """
     Processa entrada (texto, áudio ou imagem), chama o consultor LLM e responde.
@@ -1492,6 +1724,25 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
             return
 
         log.info("Mensagem processada de %s: %s", sender, user_message[:100])
+
+        # ── Detecta comandos de operador (via WhatsApp do corretor) ──────────
+        corretor_num = _ctx_corretor_number()
+        if corretor_num and sender == corretor_num:
+            handled = await _handle_operator_command(sender, user_message)
+            if handled:
+                return   # comando processado — não passa pelo LLM
+
+        # ── Human mode: se operador assumiu esta conversa, fica em silêncio ──
+        if await _is_human_mode(sender):
+            # Persiste a mensagem no histórico mas não responde
+            history = await get_history(redis_client, sender)
+            history.append({"role": "user", "content": user_message})
+            await save_history(redis_client, sender, history)
+            asyncio.create_task(_supabase_upsert_lead(sender))
+            asyncio.create_task(_supabase_append_conversa(sender, "user", user_message,
+                                                           media_info.get("type", "text") if media_info else "text"))
+            log.info("[HUMAN MODE] Mensagem de %s salva mas sem resposta automática", sender)
+            return
 
         # ── Atualiza score de intenção ─────────────────────────────────────────
         new_score, score_delta, score_breakdown = await _update_lead_score(sender, user_message)
@@ -1587,6 +1838,78 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
 # Alias para compatibilidade com código legado
 async def _process_and_reply(sender: str, text: str):
     await _process_media_and_reply(sender, text, None)
+
+
+@app.post("/human-takeover")
+async def human_takeover_endpoint(request: Request):
+    """
+    Assume ou devolve uma conversa para o operador humano.
+
+    Body: {
+        "phone": "5511999998888",      # obrigatório
+        "action": "take" | "release",  # obrigatório
+        "operator": "Nome/número",     # opcional
+        "note": "motivo",              # opcional
+        "instance": "devlabz"          # opcional (para multi-tenant)
+    }
+
+    Header (opcional): X-Setup-Secret para autenticação
+
+    Resposta:
+      200 → { "status": "ok", "phone": "...", "action": "...", "human_mode": true/false }
+      400 → parâmetros inválidos
+    """
+    # Auth opcional — usa o mesmo secret do setup
+    secret = request.headers.get("X-Setup-Secret", "")
+    if SETUP_SECRET and secret != SETUP_SECRET:
+        return Response(status_code=403, content="Unauthorized")
+
+    try:
+        body = await request.json()
+    except Exception:
+        return Response(status_code=400, content="JSON invalido")
+
+    phone  = (body.get("phone") or "").strip().replace("+", "").replace(" ", "")
+    action = (body.get("action") or "").strip().lower()
+    operator = body.get("operator", "dashboard") or "dashboard"
+    note     = body.get("note", "") or ""
+    instance = body.get("instance", EVOLUTION_INSTANCE)
+
+    if not phone:
+        return Response(status_code=400, content="Campo 'phone' obrigatorio")
+    if action not in ("take", "release"):
+        return Response(status_code=400, content="Campo 'action' deve ser 'take' ou 'release'")
+
+    # Resolve contexto do cliente via instance
+    ctx = _build_client_context(instance)
+    _client_ctx.set(ctx)
+
+    active = (action == "take")
+    await _set_human_mode_triggered_by(
+        phone, active,
+        triggered_by="api",
+        operator=operator,
+        note=note
+    )
+
+    log.info("[API] Human takeover: phone=%s action=%s operator=%s", phone, action, operator)
+
+    return {
+        "status":     "ok",
+        "phone":      phone,
+        "action":     action,
+        "human_mode": active,
+        "operator":   operator,
+        "message":    f"Conversa {'assumida pelo operador' if active else 'devolvida para Sofia'}.",
+    }
+
+
+@app.get("/human-mode/{phone}")
+async def human_mode_status(phone: str):
+    """Verifica se um lead está em human mode."""
+    phone = phone.strip().replace("+", "").replace(" ", "")
+    is_human = await _is_human_mode(phone)
+    return {"phone": phone, "human_mode": is_human}
 
 
 @app.post("/new-property")
@@ -1711,6 +2034,9 @@ async def setup_client(request: Request):
 
 
 IMOB_DIR = os.getenv("IMOB_DIR", "/opt/ImobOne-v2")
+
+# Human takeover
+HUMAN_MODE_TTL_HOURS = int(os.getenv("HUMAN_MODE_TTL_HOURS", "4"))   # auto-release após Nh sem atividade do operador
 
 
 def _run_setup_pipeline(client_id: str, onboarding_path: str, job_id: str):
