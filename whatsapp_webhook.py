@@ -1139,6 +1139,58 @@ async def _process_and_reply(sender: str, text: str):
     await _process_media_and_reply(sender, text, None)
 
 
+@app.post("/new-property")
+async def new_property_endpoint(request: Request):
+    """
+    Dispara o match de novo imóvel contra todos os leads ativos.
+    Payload: JSON com os campos do imóvel (id, bairro, quartos, valor, etc.)
+
+    Exemplo:
+      curl -X POST http://vps:8001/new-property \\
+           -H "Content-Type: application/json" \\
+           -d '{"id":"AV010","tipo":"Apartamento","bairro":"Moema","quartos":3,"valor":"3800000"}'
+    """
+    try:
+        imovel = await request.json()
+    except Exception:
+        return Response(status_code=400, content="JSON inválido")
+
+    imovel_id = imovel.get("id", "SEM_ID")
+    log.info("Novo imóvel recebido via endpoint: %s", imovel_id)
+
+    # Atualiza cache do portfólio com o novo imóvel (para sessões futuras)
+    if imovel_id != "SEM_ID":
+        _portfolio_cache[imovel_id] = imovel
+
+    # Dispara o engine em background — não bloqueia o response
+    loop = asyncio.get_event_loop()
+    asyncio.create_task(
+        loop.run_in_executor(None, _run_new_property_engine, imovel)
+    )
+
+    return {"status": "triggered", "imovel_id": imovel_id}
+
+
+def _run_new_property_engine(imovel: dict):
+    """Chama o followup_engine no mesmo processo para evitar cold-start."""
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent))
+        import followup_engine as fe
+        fe.CLIENT_ID          = CLIENT_ID
+        fe.CONSULTANT_NAME    = ONBOARDING.get("consultor", {}).get("nome", "Sofia")
+        fe.IMOBILIARIA_NAME   = ONBOARDING.get("nome_imobiliaria", "Ávora Imóveis")
+        fe.ANTHROPIC_API_KEY  = ANTHROPIC_API_KEY
+        fe.SUPABASE_URL       = SUPABASE_URL
+        fe.SUPABASE_KEY       = SUPABASE_KEY
+        fe.EVOLUTION_URL      = EVOLUTION_URL
+        fe.EVOLUTION_API_KEY  = EVOLUTION_API_KEY
+        fe.EVOLUTION_INSTANCE = EVOLUTION_INSTANCE
+        fe.process_new_property(imovel)
+    except Exception as e:
+        log.error("Erro no new-property engine: %s", e)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
