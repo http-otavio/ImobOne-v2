@@ -28,7 +28,7 @@ O produto final é um **consultor digital de luxo** que atende leads via WhatsAp
 - Instância legada: `/opt/imovel-ai/ImobOne-v2` (manter como backup)
 - Webhook demo: `/opt/whatsapp_webhook.py` — systemd `whatsapp-webhook.service` — porta 8001
 - Follow-up engine: `/opt/ImobOne-v2/followup_engine.py` — systemd `imob-followup.timer` (hourly)
-- Dashboard do gestor: `/opt/ImobOne-v2/dashboard.html` — HTML puro + Chart.js + Supabase JS (sem backend extra)
+- Dashboard do gestor: `/opt/ImobOne-v2/dashboard.html` — HTML puro + Chart.js + Supabase JS (sem backend extra); 5 abas: Visão Geral, Pipeline Kanban, Perfis de Leads, Inteligência de Mercado, Relatórios Semanais
 - Env vars do webhook: `/opt/webhook.env` — inclui `CORRETOR_NUMBER=5511973722075`
 - Supabase: projeto `imobonev2` (id: `ksqtyjucvldlvuzqmnjh`) — sa-east-1 — pgvector ativo
 - Evolution API (demo): instância `devlabz` em `https://api.otaviolabs.com`
@@ -430,6 +430,7 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 - **Notificação ao corretor:** quando score ≥ threshold (padrão 8), envia WhatsApp ao corretor com briefing estratégico gerado via Claude Haiku — inclui: Perfil, Busca, Budget, Prazo, Sinais quentes, Objeções, Próximo passo. Cooldown configurável (padrão 24h). Config: `CORRETOR_NUMBER`, `CORRETOR_SCORE_THRESHOLD`, `CORRETOR_COOLDOWN_HOURS`
 - **Detecção de descarte:** regex sobre mensagem do lead detecta 5 sinais (nao_e_momento, ja_comprou, sem_budget, desistencia) → marca `descartado=true`, `descartado_em`, `motivo_descarte` no Supabase
 - **Detecção de confirmação de visita:** regex sobre resposta da Sofia detecta confirmação de agendamento → seta `visita_agendada=true`, `visita_confirmada_at` no Supabase
+- **Extração de perfil estruturado:** após 5+ turnos do lead, Claude Haiku extrai perfil JSON com budget, região, perfil familiar, finalidade, prazo, motivação e objeções → salvo em `lead_profiles`. Cache Redis evita re-extração desnecessária. Custo: ~$0,001 por extração. Fire-and-forget.
 - **Endpoint `/new-property`:** recebe JSON de novo imóvel via POST, faz match semântico com leads quentes/mornos, envia mensagem personalizada via Claude Haiku para matches relevantes
 
 **Follow-up engine (`followup_engine.py`) — script standalone (systemd timer hourly):**
@@ -440,8 +441,10 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 - **Cenário 5 — Novo imóvel:** match e mensagem personalizada para leads com perfil compatível
 - **Cenário 6 — Reativação CRM:** leads inativos >30 dias recebem mensagem com match atual do portfólio
 - **Cenário 7 — Nutrição de descartados:** sequência linear 30d → 60d → 90d com 3 ângulos distintos (oportunidade, ângulo alternativo, porta aberta). Não pula etapas — 60d só dispara se 30d já foi enviado.
+- **Cenário 8 — Lembrete pré-visita:** 24h antes da visita confirmada: (a) mensagem de confirmação elegante ao lead; (b) briefing estratégico completo ao corretor via WhatsApp com perfil, sinais quentes, objeções e próximo passo recomendado.
+- **Cenário 9 — Relatório semanal de inteligência:** toda segunda-feira às 8h, gera e envia ao corretor via WhatsApp um relatório executivo com métricas da semana, leads prioritários, padrões de mercado detectados e recomendação de ação. Salvo em `weekly_reports` no Supabase.
 - **Idempotência:** tabela `followup_events` + TTL por tipo de evento — sem duplicatas
-- **Modos de execução:** `--dry-run`, `--new-property '{"id":"AV010",...}'`, `--crm`, `--discard`
+- **Modos de execução:** `--dry-run`, `--new-property '{"id":"AV010",...}'`, `--crm`, `--discard`, `--weekly-report`, `--pre-visit`
 - **Infraestrutura:** `/etc/systemd/system/imob-followup.service` + `.timer` (OnCalendar=hourly, RandomizedDelaySec=300)
 
 **Estratégia multi-tenant (decisão arquitetural — Março 2026):**
@@ -468,6 +471,10 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 - **Detecção de visita confirmada — sobre resposta da Sofia, não do lead:** Sofia é quem diz "sua visita está confirmada para..." — regex garante precisão e não gera false positives por ambiguidade do lead.
 - **Supabase URL encoding no followup_engine:** timestamps com `+00:00` quebram query params — usar `strftime("%Y-%m-%dT%H:%M:%SZ")` + `urllib.parse.quote()` em todas as queries com filtro de data.
 - **Nutrição de descartados — sem LLM para classificar etapa:** progressão 30→60→90 calculada por dias desde descarte + verificação de `followup_events` — determinístico, sem custo adicional de inferência.
+- **Extração de perfil — Haiku retorna JSON puro:** sem markdown, sem texto extra. Campos com `null` para dados ausentes. `confidence_score` 0-1 indica confiabilidade. Cache Redis key `whatsapp:profile_extracted:{sender}` TTL 1h — re-extrai se ≥3 novos turnos.
+- **Relatório semanal — Haiku sobre dados agregados:** lê leads, perfis, conversas e followup_events dos últimos 7 dias → gera prose executiva (~350 palavras). Salvo em `weekly_reports` para histórico no dashboard.
+- **Lembrete pré-visita — depende de `visit_scheduled_at`:** campo adicionado na migration mas não populado automaticamente ainda — Sofia confirma visita mas não seta o campo. Próximo passo: webhook deve parsear a data da confirmação de visita e setar `visit_scheduled_at`.
+- **consultant_base.md v2 — framework de objeções:** 5 cenários completos (preço, prazo, concorrência, decisão, tamanho) com sequência RECONHECER→APROFUNDAR→REPOSICIONAR. Qualificação familiar estruturada em 6 perguntas sequenciais. Lista VIP de lançamentos com coleta de perfil pré-evento. Transições de fechamento premium substituindo frases genéricas de vendedor.
 - **Haiku não prefixar mensagem de novo imóvel:** prompt deve incluir explicitamente "A resposta deve conter APENAS a mensagem final. Não inclua prefixos como 'Compatibilidade:' ou 'Mensagem:'".
 
 ### Estrutura de dados Supabase — migrations aplicadas (Março 2026)
@@ -476,6 +483,7 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 | `add_intention_score_and_corretor_notified` | `leads.intention_score`, `leads.score_breakdown`, `leads.corretor_notified_at`, `leads.corretor_notified_score` |
 | `create_followup_events_table` | tabela `followup_events` (phone, event_type, sent_at, message_preview, lead_name); `leads.visita_agendada`, `leads.visita_confirmada_at` |
 | `add_lead_discard_fields` | `leads.descartado`, `leads.descartado_em`, `leads.motivo_descarte`; constraint `followup_events.event_type` expandido para incluir tipos de descarte e pós-visita |
+| `create_lead_profiles_and_weekly_reports` | tabela `lead_profiles` (budget, neighborhoods, family_profile, purchase_purpose, timeline_months, main_motivation, key_objections, confidence_score); tabela `weekly_reports` (report_data jsonb); `leads.visit_scheduled_at`, `leads.visit_reminder_sent`; `followup_events.event_type` expandido para `pre_visit_reminder`, `weekly_report` |
 
 ### Integrações CRM — estratégia (Março 2026)
 Arquitetura escolhida: **bidirecional via webhook REST** — sem SDK proprietário, funciona com qualquer CRM que tenha API.
