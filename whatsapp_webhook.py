@@ -510,25 +510,100 @@ def _detect_visit_confirmation(reply: str) -> bool:
     return bool(_VISIT_CONFIRMATION_RE.search(reply))
 
 
-async def _supabase_confirm_visit(sender: str):
-    """Marca visita_agendada=true e visita_confirmada_at=now() no lead."""
+# Meses em português para parsing de data
+_MESES_PT = {
+    "janeiro": 1, "fevereiro": 2, "março": 3, "abril": 4,
+    "maio": 5, "junho": 6, "julho": 7, "agosto": 8,
+    "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12,
+}
+
+# Padrão obrigatório do consultant_base.md para confirmação de visita:
+# "Visita confirmada para [dia-semana], [DD] de [mês], às [H]h"
+_VISIT_DATETIME_RE = re.compile(
+    r'(?:segunda|terça|quarta|quinta|sexta|sábado|domingo)'
+    r'(?:-feira)?[,\s]+'
+    r'(\d{1,2})\s+de\s+(janeiro|fevereiro|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)'
+    r'[^à]*às\s*(\d{1,2})h(?:(\d{2}))?',
+    re.IGNORECASE
+)
+
+
+def _parse_visit_datetime_from_reply(reply: str) -> "datetime | None":
+    """
+    Extrai a data e hora da visita do texto de confirmação da Sofia.
+    Formato esperado: "...terça-feira, 31 de março, às 10h..."
+    Retorna datetime em UTC (assume fuso Brasília UTC-3).
+    Retorna None se não encontrar data válida.
+    """
+    from datetime import datetime, timezone, timedelta
+    import re as _re
+
+    m = _VISIT_DATETIME_RE.search(reply)
+    if not m:
+        return None
+
+    day_str, month_str, hour_str, minute_str = m.groups()
+    try:
+        day   = int(day_str)
+        month = _MESES_PT.get(month_str.lower())
+        hour  = int(hour_str)
+        minute = int(minute_str) if minute_str else 0
+        if not month:
+            return None
+    except (ValueError, TypeError):
+        return None
+
+    # Determina o ano: usa o ano atual, mas se a data já passou usa o próximo ano
+    now = datetime.now(timezone.utc)
+    year = now.year
+    try:
+        # Brasília = UTC-3
+        dt_brasilia = datetime(year, month, day, hour, minute)
+        dt_utc = dt_brasilia.replace(tzinfo=timezone(timedelta(hours=-3))).astimezone(timezone.utc)
+        # Se a data já passou (mais de 1 dia), assume ano seguinte
+        if dt_utc < now - timedelta(days=1):
+            dt_brasilia = datetime(year + 1, month, day, hour, minute)
+            dt_utc = dt_brasilia.replace(tzinfo=timezone(timedelta(hours=-3))).astimezone(timezone.utc)
+        return dt_utc
+    except ValueError:
+        return None
+
+
+async def _supabase_confirm_visit(sender: str, reply: str = ""):
+    """
+    Marca visita_agendada=true e visita_confirmada_at=now() no lead.
+    Também parseia a data/hora da visita da resposta da Sofia e salva em visit_scheduled_at.
+    """
     sb = _get_supabase()
     if not sb:
         return
     try:
         from datetime import datetime, timezone
         loop = asyncio.get_event_loop()
+
+        data = {
+            "client_id":             _ctx_client_id(),
+            "lead_phone":            sender,
+            "visita_agendada":       True,
+            "visita_confirmada_at":  datetime.now(timezone.utc).isoformat(),
+        }
+
+        # Tenta parsear a data/hora da visita da resposta da Sofia
+        if reply:
+            visit_dt = _parse_visit_datetime_from_reply(reply)
+            if visit_dt:
+                data["visit_scheduled_at"] = visit_dt.isoformat()
+                log.info("Data da visita parseada para %s: %s", sender, visit_dt.isoformat())
+            else:
+                log.debug("Não foi possível parsear data da visita da resposta para %s", sender)
+
         await loop.run_in_executor(None, lambda: (
             sb.table("leads")
-              .upsert({
-                  "client_id":             _ctx_client_id(),
-                  "lead_phone":            sender,
-                  "visita_agendada":       True,
-                  "visita_confirmada_at":  datetime.now(timezone.utc).isoformat(),
-              }, on_conflict="client_id,lead_phone")
+              .upsert(data, on_conflict="client_id,lead_phone")
               .execute()
         ))
-        log.info("Visita confirmada registrada para %s", sender)
+        log.info("Visita confirmada registrada para %s%s",
+                 sender, " com data agendada" if "visit_scheduled_at" in data else "")
     except Exception as e:
         log.warning("Falha ao registrar visita confirmada: %s", e)
 
@@ -1459,7 +1534,7 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
 
         # ── Detecta confirmação de visita na resposta da Sofia ───────────────
         if _detect_visit_confirmation(reply_clean):
-            asyncio.create_task(_supabase_confirm_visit(sender))
+            asyncio.create_task(_supabase_confirm_visit(sender, reply_clean))
 
         # ── Extrai perfil estruturado do lead após N turnos ──────────────────────
         if len([m for m in history if m.get("role") == "user"]) >= _PROFILE_EXTRACTION_TURNS:
