@@ -21,10 +21,15 @@ O produto final é um **consultor digital de luxo** que atende leads via WhatsAp
 
 **Infraestrutura ativa:**
 - VPS: `76.13.165.64` — Docker Swarm, serviço `imob_agents`
-- Repositório: `https://github.com/http-otavio/ImobOne-v2` (privado)
+- SSH: `ssh vps-imob` (alias em `~/.ssh/config`, chave `~/.ssh/cowork_deploy`)
+- Python venv: `/opt/webhook-venv/bin/python3` (contém anthropic, supabase, openai, etc.)
+- Repositório: `https://github.com/http-otavio/ImobOne-v2` (privado) — remote git: `git@github-imob:http-otavio/ImobOne-v2.git`
 - Clone no VPS: `/opt/ImobOne-v2` (deploy via `git pull + docker build + service update`)
 - Instância legada: `/opt/imovel-ai/ImobOne-v2` (manter como backup)
 - Webhook demo: `/opt/whatsapp_webhook.py` — systemd `whatsapp-webhook.service` — porta 8001
+- Follow-up engine: `/opt/ImobOne-v2/followup_engine.py` — systemd `imob-followup.timer` (hourly)
+- Dashboard do gestor: `/opt/ImobOne-v2/dashboard.html` — HTML puro + Chart.js + Supabase JS (sem backend extra)
+- Env vars do webhook: `/opt/webhook.env` — inclui `CORRETOR_NUMBER=5511973722075`
 - Supabase: projeto `imobonev2` (id: `ksqtyjucvldlvuzqmnjh`) — sa-east-1 — pgvector ativo
 - Evolution API (demo): instância `devlabz` em `https://api.otaviolabs.com`
 
@@ -423,6 +428,21 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 - Data real injetada no system prompt por chamada — agendamentos corretos
 - **Score de intenção:** calculado a cada mensagem do lead com 7 categorias de sinais (horario_visita=4, dados_pessoais=3, pergunta_especifica=3, interesse_imovel=3, foto_solicitada=2, financiamento=2, pergunta_valor=2). Acumulado no Redis (7 dias) + persistido em `leads.intention_score` + `leads.score_breakdown` no Supabase
 - **Notificação ao corretor:** quando score ≥ threshold (padrão 8), envia WhatsApp ao corretor com briefing estratégico gerado via Claude Haiku — inclui: Perfil, Busca, Budget, Prazo, Sinais quentes, Objeções, Próximo passo. Cooldown configurável (padrão 24h). Config: `CORRETOR_NUMBER`, `CORRETOR_SCORE_THRESHOLD`, `CORRETOR_COOLDOWN_HOURS`
+- **Detecção de descarte:** regex sobre mensagem do lead detecta 5 sinais (nao_e_momento, ja_comprou, sem_budget, desistencia) → marca `descartado=true`, `descartado_em`, `motivo_descarte` no Supabase
+- **Detecção de confirmação de visita:** regex sobre resposta da Sofia detecta confirmação de agendamento → seta `visita_agendada=true`, `visita_confirmada_at` no Supabase
+- **Endpoint `/new-property`:** recebe JSON de novo imóvel via POST, faz match semântico com leads quentes/mornos, envia mensagem personalizada via Claude Haiku para matches relevantes
+
+**Follow-up engine (`followup_engine.py`) — script standalone (systemd timer hourly):**
+- **Cenário 1 — Silêncio 24h:** mensagem de reengajamento após 24h sem resposta (máx. 1 por lead)
+- **Cenário 2 — Silêncio 48h:** segunda tentativa com ângulo diferente após 48h (só se 24h já enviado)
+- **Cenário 3 — Silêncio 7d:** reativação gentil após 7 dias, pergunta se situação mudou
+- **Cenário 4 — Pós-visita:** mensagem de follow-up 24h após visita confirmada
+- **Cenário 5 — Novo imóvel:** match e mensagem personalizada para leads com perfil compatível
+- **Cenário 6 — Reativação CRM:** leads inativos >30 dias recebem mensagem com match atual do portfólio
+- **Cenário 7 — Nutrição de descartados:** sequência linear 30d → 60d → 90d com 3 ângulos distintos (oportunidade, ângulo alternativo, porta aberta). Não pula etapas — 60d só dispara se 30d já foi enviado.
+- **Idempotência:** tabela `followup_events` + TTL por tipo de evento — sem duplicatas
+- **Modos de execução:** `--dry-run`, `--new-property '{"id":"AV010",...}'`, `--crm`, `--discard`
+- **Infraestrutura:** `/etc/systemd/system/imob-followup.service` + `.timer` (OnCalendar=hourly, RandomizedDelaySec=300)
 
 **Estratégia multi-tenant (decisão arquitetural — Março 2026):**
 - Não é necessário uma VPS por cliente
@@ -444,6 +464,27 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 - **Score de intenção — LLM não avalia:** o score é calculado via regex/heurística no webhook, não pelo LLM. Isso garante baixo custo, baixa latência e sem risco de alucinação no cálculo.
 - **Resumo estratégico ao corretor via Haiku:** Claude Haiku gera o briefing da conversa (não Sonnet) — custo ~$0,001 por notificação. Fire-and-forget via `asyncio.create_task` — não bloqueia a resposta ao lead.
 - **consultant_base.md — bugs corrigidos (Março 2026):** proibição explícita de dados financeiros inventados (rentabilidade, yield, cap rate); reconhecimento implícito de slot de agendamento ("terça às 10h" = confirmação); coleta de nome em todos os perfis incluindo investidor; "nome e sobrenome" em vez de "nome completo".
+- **Detecção de descarte — regex, não LLM:** mesma lógica do score. Baixo custo, sem latência extra, sem risco de alucinação. 5 padrões mapeados → 3 motivos (nao_e_momento, ja_comprou, sem_budget/desistencia).
+- **Detecção de visita confirmada — sobre resposta da Sofia, não do lead:** Sofia é quem diz "sua visita está confirmada para..." — regex garante precisão e não gera false positives por ambiguidade do lead.
+- **Supabase URL encoding no followup_engine:** timestamps com `+00:00` quebram query params — usar `strftime("%Y-%m-%dT%H:%M:%SZ")` + `urllib.parse.quote()` em todas as queries com filtro de data.
+- **Nutrição de descartados — sem LLM para classificar etapa:** progressão 30→60→90 calculada por dias desde descarte + verificação de `followup_events` — determinístico, sem custo adicional de inferência.
+- **Haiku não prefixar mensagem de novo imóvel:** prompt deve incluir explicitamente "A resposta deve conter APENAS a mensagem final. Não inclua prefixos como 'Compatibilidade:' ou 'Mensagem:'".
+
+### Estrutura de dados Supabase — migrations aplicadas (Março 2026)
+| Migration | Campos adicionados |
+|-----------|-------------------|
+| `add_intention_score_and_corretor_notified` | `leads.intention_score`, `leads.score_breakdown`, `leads.corretor_notified_at`, `leads.corretor_notified_score` |
+| `create_followup_events_table` | tabela `followup_events` (phone, event_type, sent_at, message_preview, lead_name); `leads.visita_agendada`, `leads.visita_confirmada_at` |
+| `add_lead_discard_fields` | `leads.descartado`, `leads.descartado_em`, `leads.motivo_descarte`; constraint `followup_events.event_type` expandido para incluir tipos de descarte e pós-visita |
+
+### Integrações CRM — estratégia (Março 2026)
+Arquitetura escolhida: **bidirecional via webhook REST** — sem SDK proprietário, funciona com qualquer CRM que tenha API.
+- **Tier 1 (prioridade):** CV CRM (dominante no Brasil imobiliário), Pipedrive (mais adotado por imobiliárias menores), RD Station (muitas imobiliárias usam para marketing)
+- **Tier 2:** HubSpot, Salesforce, Bitrix24
+- **Tier 3 (verticais imobiliários):** Jetimob, Kenlo, Superlógica
+- **Implementar quando:** primeiro cliente real confirmar CRM em uso — não antes. Não construir adaptadores genéricos antecipadamente.
+- **Webhook de saída (Sofia → CRM):** `crm_webhook.py` já existe como wrapper genérico. Configurar endpoint por cliente no `onboarding.json`.
+- **Webhook de entrada (CRM → Sofia):** endpoint no webhook para receber eventos do CRM (novo lead, atualização de status, oportunidade encerrada) — base para cenário 6 (reativação CRM).
 
 ### Testes mínimos antes de avançar de agente
 - Cada agente deve ter ao menos 3 testes unitários antes de ser integrado ao grafo
@@ -482,5 +523,5 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 
 ---
 
-*Última atualização: Março 2026 — Fase 2 infra completa. Demo ao vivo com Sofia via Evolution API. Supabase ativo (leads + conversas + pgvector + score de intenção). ElevenLabs TTS ativo (voz Sarah multilingual; Yasmin BR requer upgrade Starter). OpenAI Whisper ativo. Score de intenção + notificação ao corretor com briefing estratégico (Haiku) ativos. Próximo passo: 360dialog → primeiro cliente real.*
+*Última atualização: Março 2026 — Fase 2 infra completa. Demo ao vivo com Sofia via Evolution API. Supabase ativo (leads + conversas + pgvector + score de intenção + descarte + eventos de follow-up). ElevenLabs TTS ativo (voz Sarah multilingual; Yasmin BR requer upgrade Starter). OpenAI Whisper ativo. Score de intenção + notificação ao corretor com briefing estratégico (Haiku) ativos. Follow-up engine com 7 cenários (silêncio, pós-visita, novo imóvel, reativação CRM, nutrição 30/60/90d) em produção via systemd timer. Dashboard do gestor (HTML) disponível. Próximo passo: 360dialog → primeiro cliente real.*
 *Este documento é a fonte da verdade do projeto. Qualquer decisão que conflite com ele deve passar pelo arquiteto auditor antes de ser implementada.*
