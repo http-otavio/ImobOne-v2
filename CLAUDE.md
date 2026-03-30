@@ -28,7 +28,7 @@ O produto final é um **consultor digital de luxo** que atende leads via WhatsAp
 - Instância legada: `/opt/imovel-ai/ImobOne-v2` (manter como backup)
 - Webhook demo: `/opt/whatsapp_webhook.py` — systemd `whatsapp-webhook.service` — porta 8001
 - Follow-up engine: `/opt/ImobOne-v2/followup_engine.py` — systemd `imob-followup.timer` (hourly)
-- Dashboard do gestor: `/opt/ImobOne-v2/dashboard.html` — HTML puro + Chart.js + Supabase JS (sem backend extra); 5 abas: Visão Geral, Pipeline Kanban, Perfis de Leads, Inteligência de Mercado, Relatórios Semanais
+- Dashboard do gestor: `/opt/ImobOne-v2/dashboard.html` — HTML puro + Chart.js + Supabase JS (sem backend extra); 6 abas: Visão Geral, Pipeline Kanban, Perfis de Leads, Inteligência de Mercado, Relatórios Semanais, Transferências (human takeover)
 - Env vars do webhook: `/opt/webhook.env` — inclui `CORRETOR_NUMBER=5511973722075`
 - Supabase: projeto `imobonev2` (id: `ksqtyjucvldlvuzqmnjh`) — sa-east-1 — pgvector ativo
 - Evolution API (demo): instância `devlabz` em `https://api.otaviolabs.com`
@@ -432,6 +432,11 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 - **Detecção de confirmação de visita:** regex sobre resposta da Sofia detecta confirmação de agendamento → seta `visita_agendada=true`, `visita_confirmada_at` no Supabase
 - **Extração de perfil estruturado:** após 5+ turnos do lead, Claude Haiku extrai perfil JSON com budget, região, perfil familiar, finalidade, prazo, motivação e objeções → salvo em `lead_profiles`. Cache Redis evita re-extração desnecessária. Custo: ~$0,001 por extração. Fire-and-forget.
 - **Endpoint `/new-property`:** recebe JSON de novo imóvel via POST, faz match semântico com leads quentes/mornos, envia mensagem personalizada via Claude Haiku para matches relevantes
+- **Human takeover:** operador assume/devolve conversa em tempo real. Quando em human_mode, Sofia fica em silêncio — mensagens do lead são salvas no histórico mas não geram resposta. Auto-release após `HUMAN_MODE_TTL_HOURS` horas (padrão 4h) via TTL Redis.
+  - `POST /human-takeover` — `{phone, action: "take"|"release", operator?, note?}` — auth via `X-Setup-Secret`
+  - `GET /human-mode/{phone}` — status atual do lead
+  - Comando WhatsApp (enviado pelo corretor para o número da Sofia): `#assumir {phone}`, `#devolver {phone}`, `#status {phone}`, `#leads`
+  - Dashboard: aba "Transferências" com lista de conversas em human mode, formulário manual, log de auditoria
 
 **Follow-up engine (`followup_engine.py`) — script standalone (systemd timer hourly):**
 - **Cenário 1 — Silêncio 24h:** mensagem de reengajamento após 24h sem resposta (máx. 1 por lead)
@@ -475,6 +480,9 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 - **Relatório semanal — Haiku sobre dados agregados:** lê leads, perfis, conversas e followup_events dos últimos 7 dias → gera prose executiva (~350 palavras). Salvo em `weekly_reports` para histórico no dashboard.
 - **Lembrete pré-visita — depende de `visit_scheduled_at`:** campo adicionado na migration mas não populado automaticamente ainda — Sofia confirma visita mas não seta o campo. Próximo passo: webhook deve parsear a data da confirmação de visita e setar `visit_scheduled_at`.
 - **consultant_base.md v2 — framework de objeções:** 5 cenários completos (preço, prazo, concorrência, decisão, tamanho) com sequência RECONHECER→APROFUNDAR→REPOSICIONAR. Qualificação familiar estruturada em 6 perguntas sequenciais. Lista VIP de lançamentos com coleta de perfil pré-evento. Transições de fechamento premium substituindo frases genéricas de vendedor.
+- **Human mode — Redis TTL como mecanismo de auto-release:** chave `whatsapp:human_mode:{client_id}:{phone}` com TTL = `HUMAN_MODE_TTL_HOURS * 3600s`. Sem precisar de job de limpeza — Redis expira sozinho. Supabase persiste para visibilidade no dashboard mesmo após expiração Redis.
+- **Comando WhatsApp só aceito do CORRETOR_NUMBER:** segurança por número. Comandos enviados de outros números são tratados como mensagens normais de lead e passam pelo LLM normalmente.
+- **visit_scheduled_at — parseado da resposta da Sofia:** regex captura o formato obrigatório do consultant_base ("terça-feira, 31 de março, às 10h") e converte para UTC (Brasília -3h). Fallback seguro: se Sofia não incluir data completa, campo fica null sem erro.
 - **Haiku não prefixar mensagem de novo imóvel:** prompt deve incluir explicitamente "A resposta deve conter APENAS a mensagem final. Não inclua prefixos como 'Compatibilidade:' ou 'Mensagem:'".
 
 ### Estrutura de dados Supabase — migrations aplicadas (Março 2026)
@@ -484,6 +492,7 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 | `create_followup_events_table` | tabela `followup_events` (phone, event_type, sent_at, message_preview, lead_name); `leads.visita_agendada`, `leads.visita_confirmada_at` |
 | `add_lead_discard_fields` | `leads.descartado`, `leads.descartado_em`, `leads.motivo_descarte`; constraint `followup_events.event_type` expandido para incluir tipos de descarte e pós-visita |
 | `create_lead_profiles_and_weekly_reports` | tabela `lead_profiles` (budget, neighborhoods, family_profile, purchase_purpose, timeline_months, main_motivation, key_objections, confidence_score); tabela `weekly_reports` (report_data jsonb); `leads.visit_scheduled_at`, `leads.visit_reminder_sent`; `followup_events.event_type` expandido para `pre_visit_reminder`, `weekly_report` |
+| `add_human_mode_to_leads` | `leads.human_mode`, `leads.human_mode_at`, `leads.human_mode_by`, `leads.human_mode_note`; tabela `human_takeover_log` (client_id, lead_phone, action, triggered_by, operator, note) |
 
 ### Integrações CRM — estratégia (Março 2026)
 Arquitetura escolhida: **bidirecional via webhook REST** — sem SDK proprietário, funciona com qualquer CRM que tenha API.
@@ -531,5 +540,5 @@ Arquitetura escolhida: **bidirecional via webhook REST** — sem SDK proprietár
 
 ---
 
-*Última atualização: Março 2026 — Fase 2 infra completa. Demo ao vivo com Sofia via Evolution API. Supabase ativo (leads + conversas + pgvector + score de intenção + descarte + eventos de follow-up). ElevenLabs TTS ativo (voz Sarah multilingual; Yasmin BR requer upgrade Starter). OpenAI Whisper ativo. Score de intenção + notificação ao corretor com briefing estratégico (Haiku) ativos. Follow-up engine com 7 cenários (silêncio, pós-visita, novo imóvel, reativação CRM, nutrição 30/60/90d) em produção via systemd timer. Dashboard do gestor (HTML) disponível. Próximo passo: 360dialog → primeiro cliente real.*
+*Última atualização: Março 2026 — Fase 2 infra completa. Human takeover ativo (assume/devolve via dashboard, API REST e comando WhatsApp). visit_scheduled_at parseado da resposta da Sofia. Demo ao vivo com Sofia via Evolution API. Supabase ativo (leads + conversas + pgvector + score de intenção + descarte + eventos de follow-up). ElevenLabs TTS ativo (voz Sarah multilingual; Yasmin BR requer upgrade Starter). OpenAI Whisper ativo. Score de intenção + notificação ao corretor com briefing estratégico (Haiku) ativos. Follow-up engine com 7 cenários (silêncio, pós-visita, novo imóvel, reativação CRM, nutrição 30/60/90d) em produção via systemd timer. Dashboard do gestor (HTML) disponível. Próximo passo: 360dialog → primeiro cliente real.*
 *Este documento é a fonte da verdade do projeto. Qualquer decisão que conflite com ele deve passar pelo arquiteto auditor antes de ser implementada.*
