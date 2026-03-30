@@ -421,8 +421,17 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 - Persiste leads + histórico de conversas no Supabase em tempo real
 - Lock por sender — sem race condition em mensagens simultâneas
 - Data real injetada no system prompt por chamada — agendamentos corretos
+- **Score de intenção:** calculado a cada mensagem do lead com 7 categorias de sinais (horario_visita=4, dados_pessoais=3, pergunta_especifica=3, interesse_imovel=3, foto_solicitada=2, financiamento=2, pergunta_valor=2). Acumulado no Redis (7 dias) + persistido em `leads.intention_score` + `leads.score_breakdown` no Supabase
+- **Notificação ao corretor:** quando score ≥ threshold (padrão 8), envia WhatsApp ao corretor com briefing estratégico gerado via Claude Haiku — inclui: Perfil, Busca, Budget, Prazo, Sinais quentes, Objeções, Próximo passo. Cooldown configurável (padrão 24h). Config: `CORRETOR_NUMBER`, `CORRETOR_SCORE_THRESHOLD`, `CORRETOR_COOLDOWN_HOURS`
 
-### Decisões técnicas tomadas durante a implementação da FASE 1
+**Estratégia multi-tenant (decisão arquitetural — Março 2026):**
+- Não é necessário uma VPS por cliente
+- Cada cliente vira um Docker service no Swarm com env vars isoladas (portfólio, persona, voz, número WhatsApp)
+- Supabase e Redis já isolam por `client_id` — sem vazamento entre clientes
+- Escalar VPS verticalmente (RAM/CPU) antes de adicionar hardware — suporta ~8–10 clientes ativos com folga
+- Custo por cliente: 360dialog ~R$290/mês + taxa Meta por conversa (~R$0,40)
+
+### Decisões técnicas tomadas durante a implementação da FASE 1 e FASE 2
 - **LLM do consultor:** `claude-sonnet-4-6` — não Haiku. O consultor do produto (QA jornadas + futuro FASE 2) usa Sonnet para qualidade de resposta. Haiku fica restrito ao evaluator e agentes de execução simples.
 - **LLM evaluator:** usa assistant prefill `{"passou":` para forçar JSON válido — elimina falhas de parse
 - **Prompts base:** baked no Docker via `_prompts_build/` (workaround para FUSE filesystem do Cowork). Fonte da verdade é `_prompts_build/consultant_base.md`, que é copiado para `/app/prompts/base/` no build.
@@ -432,6 +441,9 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 - **qa_integration skip:** aceitável em deploy com credenciais reais pendentes; gate obrigatório antes de cliente real
 - **portfolio_path é aninhado:** no `onboarding.json`, o caminho do CSV está em `onboarding["portfolio"]["portfolio_path"]`, não em `onboarding["portfolio_path"]`. O `setup_pipeline.py` lê com fallback para os dois formatos. Nunca remover esse fallback.
 - **Critérios de QA:** devem ser objetivamente verificáveis pelo Haiku evaluator a partir do texto da resposta. Critérios como "não deve inventar X" falham porque o Haiku não tem como verificar a origem dos dados — preferir "deve atribuir fonte X na resposta" ou reduzir severidade para INFORMATIVO.
+- **Score de intenção — LLM não avalia:** o score é calculado via regex/heurística no webhook, não pelo LLM. Isso garante baixo custo, baixa latência e sem risco de alucinação no cálculo.
+- **Resumo estratégico ao corretor via Haiku:** Claude Haiku gera o briefing da conversa (não Sonnet) — custo ~$0,001 por notificação. Fire-and-forget via `asyncio.create_task` — não bloqueia a resposta ao lead.
+- **consultant_base.md — bugs corrigidos (Março 2026):** proibição explícita de dados financeiros inventados (rentabilidade, yield, cap rate); reconhecimento implícito de slot de agendamento ("terça às 10h" = confirmação); coleta de nome em todos os perfis incluindo investidor; "nome e sobrenome" em vez de "nome completo".
 
 ### Testes mínimos antes de avançar de agente
 - Cada agente deve ter ao menos 3 testes unitários antes de ser integrado ao grafo
@@ -470,5 +482,5 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 
 ---
 
-*Última atualização: Março 2026 — Fase 2 em andamento. Demo ao vivo com Sofia via Evolution API. Supabase ativo (leads + conversas + pgvector). ElevenLabs TTS ativo (voz Sarah multilingual; Yasmin BR requer upgrade Starter). OpenAI Whisper ativo para transcrição de áudio recebido. Próximo passo: 360dialog → primeiro cliente real.*
+*Última atualização: Março 2026 — Fase 2 infra completa. Demo ao vivo com Sofia via Evolution API. Supabase ativo (leads + conversas + pgvector + score de intenção). ElevenLabs TTS ativo (voz Sarah multilingual; Yasmin BR requer upgrade Starter). OpenAI Whisper ativo. Score de intenção + notificação ao corretor com briefing estratégico (Haiku) ativos. Próximo passo: 360dialog → primeiro cliente real.*
 *Este documento é a fonte da verdade do projeto. Qualquer decisão que conflite com ele deve passar pelo arquiteto auditor antes de ser implementada.*
