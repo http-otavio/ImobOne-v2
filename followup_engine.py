@@ -239,6 +239,15 @@ def record_sent(lead_phone: str, event_type: str, message: str, imovel_id: Optio
 
 # ─── Geração de mensagem via Haiku ───────────────────────────────────────────
 _SCENARIO_PROMPTS = {
+    "crm_reactivation": (
+        "Este lead está parado há mais de 30 dias sem interação.\n"
+        "Com base no histórico (se houver) e nos sinais de interesse registrados, "
+        "identifique o que ele estava buscando e escreva uma mensagem de reativação.\n"
+        "Tom: leve, sem pressão, como se fosse uma atualização natural do mercado. "
+        "Se não há histórico: apresente-se brevemente e mencione uma oportunidade relevante "
+        "do portfólio para o perfil inferido.\n"
+        "Máximo 2 frases. Nunca mencione que ele ficou sumido ou que faz tempo."
+    ),
     "silence_24h": (
         "O lead parou de responder há cerca de 24 horas. Sofia enviou a última mensagem.\n"
         "Escreva UMA mensagem curta retomando a conversa de forma natural.\n"
@@ -417,6 +426,77 @@ def process_silence_followups(dry_run: bool = False):
     return enviados
 
 
+# ─── Cenário CRM: reativação de leads frios (> 30 dias) ─────────────────────
+def process_crm_reactivation(dry_run: bool = False):
+    """
+    Busca leads com intention_score = 0 (vieram de CRM sem histórico com Sofia)
+    ou leads que não interagem há mais de 30 dias, independente do score.
+    Gera mensagem de reativação personalizada com base no portfólio atual.
+    """
+    log.info("=== CRM Reativação: buscando leads frios ===")
+    now = datetime.now(timezone.utc)
+    cutoff_30d = (now - timedelta(days=30)).isoformat()
+
+    # Leads sem interação há 30+ dias (inclui score 0 do CRM)
+    leads = _sb_get(
+        "leads",
+        (
+            f"client_id=eq.{CLIENT_ID}"
+            f"&ultima_interacao=lte.{cutoff_30d}"
+            f"&select=lead_phone,lead_name,intention_score,score_breakdown,ultima_interacao"
+        )
+    )
+    log.info("%d leads frios encontrados (> 30 dias)", len(leads))
+
+    # Sumário do portfólio para enriquecer a mensagem quando não há histórico
+    port_summary = portfolio_summary()
+    enviados = 0
+
+    for lead in leads:
+        phone     = lead.get("lead_phone", "")
+        name      = lead.get("lead_name")
+        breakdown = lead.get("score_breakdown") or {}
+
+        if not phone:
+            continue
+
+        if was_sent(phone, "crm_reactivation"):
+            continue
+
+        # Busca histórico se existir
+        conversas = _sb_get(
+            "conversas",
+            (
+                f"client_id=eq.{CLIENT_ID}"
+                f"&lead_phone=eq.{phone}"
+                f"&order=created_at.asc"
+                f"&limit=20"
+            )
+        )
+        history = format_history(conversas)
+
+        # Contexto extra: portfólio para leads sem histórico
+        extra = ""
+        if not conversas and port_summary:
+            extra = f"\nPortfólio atual (para referência):\n{port_summary[:600]}"
+
+        msg = generate_message(
+            "crm_reactivation", name, history, breakdown,
+            extra_context=extra, dry_run=dry_run
+        )
+        if not msg:
+            continue
+
+        sent = send_whatsapp(phone, msg, dry_run=dry_run)
+        if sent:
+            if not dry_run:
+                record_sent(phone, "crm_reactivation", msg)
+            enviados += 1
+
+    log.info("CRM reativação: %d mensagens enviadas", enviados)
+    return enviados
+
+
 # ─── Cenário 5: Novo imóvel no portfólio ─────────────────────────────────────
 def process_new_property(imovel: dict, dry_run: bool = False):
     """
@@ -521,8 +601,13 @@ def main():
 
     load_portfolio()
 
-    # Modo: novo imóvel (arg) ou silêncio (padrão)
+    if not EVOLUTION_URL or not EVOLUTION_API_KEY:
+        log.error("EVOLUTION_URL/KEY não configurados.")
+        sys.exit(1)
+
+    # Modo de operação
     if "--new-property" in sys.argv:
+        # Disparo de novo imóvel: python3 followup_engine.py --new-property '{...}'
         idx = sys.argv.index("--new-property")
         try:
             imovel = json.loads(sys.argv[idx + 1])
@@ -530,10 +615,13 @@ def main():
             log.error("Argumento --new-property inválido: %s", e)
             sys.exit(1)
         process_new_property(imovel, dry_run=dry_run)
+
+    elif "--crm" in sys.argv:
+        # Reativação de CRM: roda manualmente ou sábado de manhã
+        process_crm_reactivation(dry_run=dry_run)
+
     else:
-        if not EVOLUTION_URL or not EVOLUTION_API_KEY:
-            log.error("EVOLUTION_URL/KEY não configurados.")
-            sys.exit(1)
+        # Padrão (chamado pelo timer a cada hora): silêncio
         process_silence_followups(dry_run=dry_run)
 
     log.info("Follow-up engine concluído.")

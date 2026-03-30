@@ -292,6 +292,48 @@ async def _supabase_append_conversa(sender: str, role: str, content: str, media_
         log.warning("Falha ao append conversa Supabase: %s", e)
 
 
+# Padrões que indicam Sofia confirmando uma visita
+_VISIT_CONFIRMATION_PATTERNS = [
+    r'confirmo\s+(?:a\s+visita|para)?\s+(?:a\s+)?(?:segunda|terça|quarta|quinta|sexta|sábado|domingo)',
+    r'visita\s+(?:está\s+)?confirmada',
+    r'agendei\s+(?:a\s+)?visita',
+    r'(?:às|as)\s+\d{1,2}h(?:\d{2})?\s+(?:está\s+)?confirmad',
+    r'te\s+espero\s+(?:na|no|em)',
+    r'até\s+(?:segunda|terça|quarta|quinta|sexta|sábado|domingo)',
+]
+_VISIT_CONFIRMATION_RE = re.compile(
+    '|'.join(_VISIT_CONFIRMATION_PATTERNS), re.IGNORECASE
+)
+
+
+def _detect_visit_confirmation(reply: str) -> bool:
+    """Retorna True se a resposta da Sofia indica que uma visita foi confirmada."""
+    return bool(_VISIT_CONFIRMATION_RE.search(reply))
+
+
+async def _supabase_confirm_visit(sender: str):
+    """Marca visita_agendada=true e visita_confirmada_at=now() no lead."""
+    sb = _get_supabase()
+    if not sb:
+        return
+    try:
+        from datetime import datetime, timezone
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: (
+            sb.table("leads")
+              .upsert({
+                  "client_id":             CLIENT_ID,
+                  "lead_phone":            sender,
+                  "visita_agendada":       True,
+                  "visita_confirmada_at":  datetime.now(timezone.utc).isoformat(),
+              }, on_conflict="client_id,lead_phone")
+              .execute()
+        ))
+        log.info("Visita confirmada registrada para %s", sender)
+    except Exception as e:
+        log.warning("Falha ao registrar visita confirmada: %s", e)
+
+
 def _extract_name_from_reply(reply: str) -> str | None:
     """
     Tenta extrair o nome do lead da resposta da Sofia.
@@ -1089,6 +1131,10 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
         await save_history(redis_client, sender, history)
 
         loop = asyncio.get_event_loop()
+
+        # ── Detecta confirmação de visita na resposta da Sofia ───────────────
+        if _detect_visit_confirmation(reply_clean):
+            asyncio.create_task(_supabase_confirm_visit(sender))
 
         # ── Persiste no Supabase (fire-and-forget, não bloqueia resposta) ─────
         lead_name = _extract_name_from_reply(reply_clean)
