@@ -273,6 +273,16 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Monta router de captura de leads de portais (lazy — não quebra se módulo ausente)
+try:
+    if str(BASE_DIR) not in sys.path:
+        sys.path.insert(0, str(BASE_DIR))
+    from portal_lead_capture import create_portal_router
+    app.include_router(create_portal_router())
+    log.info("Portal lead capture router montado em /portal-lead")
+except ImportError as _e:
+    log.warning("portal_lead_capture não encontrado — endpoint /portal-lead desativado: %s", _e)
+
 
 class StartRequest(BaseModel):
     client_id: str
