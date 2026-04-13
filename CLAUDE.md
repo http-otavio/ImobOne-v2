@@ -389,6 +389,53 @@ Quando o lead pergunta "tem escola boa perto?", o consultor:
 
 ---
 
+## Padrão de Engenharia — Decisões Técnicas
+
+> Este projeto é construído no padrão de uma equipe de engenharia de software e produto de alto nível. Toda decisão técnica deve ser avaliada com esse critério. Decisões que seriam aceitáveis num produto de massa são **inaceitáveis aqui** — o ICP é alto padrão, o ticket é R$2M+, e a tolerância a erro é zero.
+
+### O teste antes de qualquer decisão técnica
+
+Antes de escolher uma abordagem, responda:
+
+1. **Qual é o custo real do fracasso desta decisão?** — Não o custo da ferramenta. O custo do resultado errado. Uma objeção não detectada, uma mensagem mal classificada, uma resposta imprecisa para um lead de R$2M+ tem custo de negócio real. Se esse custo é maior que o custo da solução correta, use a solução correta.
+
+2. **Estou escolhendo isso porque é a melhor solução, ou porque é a mais simples/barata?** — Simples e barata são virtudes quando não há tradeoff de qualidade. Quando há, a qualidade vence. Sempre.
+
+3. **Uma equipe de engenharia de primeiro nível faria essa escolha?** — Se a resposta for não, a decisão está errada.
+
+4. **Estou raciocinando sobre o produto real (imóveis de alto padrão, leads sofisticados, dono que precisa de inteligência de mercado) ou sobre uma abstração genérica?** — Toda decisão deve ser ancorada no contexto real do produto.
+
+### Anti-padrões proibidos
+
+Estes são exemplos concretos de decisões ruins que já foram corrigidas ou que não devem ser repetidas:
+
+| Anti-padrão | Por que é errado | Decisão correta |
+|------------|-----------------|-----------------|
+| **Regex como gatekeeper de classificação de objeção** | Leads de alto padrão não dizem "tá caro" — dizem "está um pouco acima do que eu esperava para esse perfil". Regex não captura isso. | Haiku como classificador primário; regex só para casos inequívocos (FGTS, crédito negado) |
+| **"Cobre ~80% dos casos"** | 80% não é aceitável para um produto premium. Os 20% que escapam são exatamente os leads mais sofisticados — o core do ICP. | Cobrir 100% dos casos com a ferramenta certa, não 80% com a ferramenta mais barata |
+| **LLM como fallback** | Quando o LLM é a ferramenta certa para o problema, colocá-lo como fallback de regex é inverter a hierarquia de qualidade. | LLM como caminho principal; regex como atalho de velocidade quando o resultado é inequívoco |
+| **"É só pra MVP"** | Não existe MVP de baixa qualidade neste produto. O cliente paga R$15–25k de setup. A primeira impressão é o produto real. | Construir certo desde o início. Escopo pequeno é aceitável, qualidade ruim não é. |
+| **Custo da ferramenta como critério primário** | $0,001/chamada do Haiku versus custo de perder um lead de R$2M+ não é uma comparação válida. | O critério primário é qualidade do resultado. Custo é critério secundário, dentro de limites razoáveis. |
+| **Decisão técnica sem ancorar no ICP** | "Funciona tecnicamente" não é suficiente. A pergunta é "funciona para o dono da imobiliária de alto padrão que vai receber o relatório?" | Toda feature deve passar pelo teste: o que o dono enxerga ou ganha com isso? |
+
+### Hierarquia de critérios para decisões técnicas
+
+```
+1. Corretude para o ICP (leads de alto padrão, dono da imobiliária)
+2. Qualidade do resultado (precisão, confiabilidade, ausência de erros)
+3. Manutenibilidade (código que a equipe consegue evoluir)
+4. Performance (latência, throughput — quando relevante)
+5. Custo operacional (sempre dentro de limites aceitáveis, nunca o critério dominante)
+```
+
+Quando os critérios conflitarem, a hierarquia acima decide. **Custo operacional nunca vence qualidade do resultado neste produto.**
+
+### Sobre o Nightly Squad
+
+O Nightly Squad escreve código autônomo. Antes de propor qualquer solução técnica, o Tech Lead Agent deve aplicar o teste acima. PRs que apresentem anti-padrões listados aqui devem ser rejeitados na revisão matinal, independentemente de os testes passarem.
+
+---
+
 ## Regras de desenvolvimento
 
 ### Para Claude Code e Claude Cowork
