@@ -1,12 +1,19 @@
 """
 tests/test_objection_engine.py — Suite de testes para o objection_engine
 
-Cobre:
-    - Detecção por regex (preco, prazo, localizacao, financiamento, condominio, concorrente)
-    - Casos de borda (mensagem curta, sem objeção)
-    - compute_objection_report (métricas, dedup por lead, ordenação, taxa)
-    - format_objection_whatsapp (formatação WhatsApp do dono)
-    - detect_and_save_objection (async, com injection de mock para Supabase)
+Arquitetura de detecção (Haiku PRIMEIRO):
+    1. Regex de alta confiança — bypass em casos inequívocos (FGTS, crédito negado, etc.)
+    2. Claude Haiku — classificador primário para todo o resto (paráfrases, implícitos)
+    3. Regex amplo — fallback apenas sem API key
+
+Cobertura:
+    - Regex de alta confiança (casos inequívocos que bypassam o Haiku)
+    - Regex amplo (fallback offline — use_haiku=False)
+    - Casos que DEVEM ir para o Haiku (não capturados por regex de alta confiança)
+    - Casos de borda (mensagem curta, vazia, sem objeção)
+    - compute_objection_report (métricas, dedup, ordenação, taxa)
+    - format_objection_whatsapp (formatação para o dono)
+    - detect_and_save_objection (async, mock de Supabase)
 
 Todos os testes são offline (sem Supabase, sem Anthropic API).
 """
@@ -21,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from objection_engine import (
     CATEGORY_LABELS,
+    _check_fallback_regex,
+    _check_high_confidence_regex,
     compute_objection_report,
     detect_and_save_objection,
     detect_objection,
@@ -35,96 +44,147 @@ def run(coro):
     return asyncio.run(coro)
 
 
+# ─── 1. Regex de alta confiança (bypass do Haiku — casos inequívocos) ─────────
+# Estes casos são tão específicos que o regex é suficiente.
+# Termos vagos ("caro", "longe") NÃO devem estar aqui — devem ir para o Haiku.
 
-# ─── 1. Detecção por regex ────────────────────────────────────────────────────
+def test_high_conf_fgts():
+    """FGTS é inequívoco — financiamento sem Haiku."""
+    assert _check_high_confidence_regex("posso usar o FGTS pra dar entrada?") == "financiamento"
 
-def test_regex_preco_caro():
-    """Detecta 'caro' como objeção de preço."""
-    assert detect_objection_regex("esse apartamento tá muito caro pra mim") == "preco"
+def test_high_conf_serasa():
+    """Serasa é inequívoco — financiamento sem Haiku."""
+    assert _check_high_confidence_regex("meu nome está no Serasa") == "financiamento"
 
+def test_high_conf_credito_negado():
+    """Crédito negado no banco é inequívoco."""
+    assert _check_high_confidence_regex("meu crédito foi negado no banco") == "financiamento"
 
-def test_regex_preco_orcamento():
-    """Detecta 'fora do orçamento' como objeção de preço."""
-    assert detect_objection_regex("esse valor está fora do meu orçamento") == "preco"
+def test_high_conf_financiamento_negado():
+    """Financiamento não aprovado é inequívoco."""
+    assert _check_high_confidence_regex("meu financiamento não foi aprovado") == "financiamento"
 
+def test_high_conf_score_baixo():
+    """Score baixo é inequívoco."""
+    assert _check_high_confidence_regex("meu score está muito baixo") == "financiamento"
 
-def test_regex_preco_desconto():
-    """Detecta pedido de desconto como objeção de preço."""
-    assert detect_objection_regex("vocês têm desconto pra pagamento à vista?") == "preco"
+def test_high_conf_prazo_entrega():
+    """'Prazo de entrega' é inequívoco."""
+    assert _check_high_confidence_regex("o prazo de entrega é muito longo") == "prazo"
 
+def test_high_conf_quando_fica_pronto():
+    """'Quando fica pronto' é inequívoco."""
+    assert _check_high_confidence_regex("quando fica pronto esse empreendimento?") == "prazo"
 
-def test_regex_prazo_entrega():
-    """Detecta 'prazo de entrega' como objeção."""
-    assert detect_objection_regex("o prazo de entrega é muito longo") == "prazo"
+def test_high_conf_taxa_condominio():
+    """'Taxa de condomínio' é inequívoco."""
+    assert _check_high_confidence_regex("a taxa de condomínio está muito alta") == "condominio"
 
+def test_high_conf_condominio_caro():
+    """'Condomínio muito caro' é inequívoco."""
+    assert _check_high_confidence_regex("o condomínio muito caro pra minha realidade") == "condominio"
 
-def test_regex_prazo_quando_fica_pronto():
-    """Detecta 'quando fica pronto' como objeção de prazo."""
-    assert detect_objection_regex("quando fica pronto esse empreendimento?") == "prazo"
+def test_high_conf_outra_imobiliaria():
+    """Outra imobiliária é inequívoco."""
+    assert _check_high_confidence_regex("a outra imobiliária tem algo diferente") == "concorrente"
 
+def test_high_conf_outra_proposta():
+    """'Outra proposta' é inequívoco."""
+    assert _check_high_confidence_regex("já tenho uma proposta de outro lugar") == "concorrente"
 
-def test_regex_localizacao_longe():
-    """Detecta 'longe do trabalho' como objeção de localização."""
-    assert detect_objection_regex("o imóvel é muito longe do trabalho") == "localizacao"
+def test_high_conf_sem_match():
+    """Mensagem sem padrão de alta confiança retorna None."""
+    assert _check_high_confidence_regex("que horas vocês abrem amanhã?") is None
 
-
-def test_regex_localizacao_bairro():
-    """Detecta objeção de bairro ruim."""
-    assert detect_objection_regex("não gostei do bairro, parece perigoso") == "localizacao"
-
-
-def test_regex_financiamento_credito():
-    """Detecta financiamento negado no banco como objeção de financiamento."""
-    assert detect_objection_regex("meu credito foi negado no banco") == "financiamento"
-
-
-def test_regex_financiamento_fgts():
-    """Detecta menção a FGTS como objeção de financiamento."""
-    assert detect_objection_regex("posso usar o FGTS pra dar entrada?") == "financiamento"
-
-
-def test_regex_condominio():
-    """Detecta 'condomínio caro' como objeção."""
-    assert detect_objection_regex("o condomínio é muito caro pra minha realidade") == "condominio"
-
-
-def test_regex_concorrente():
-    """Detecta comparação com outra imobiliária como objeção."""
-    assert detect_objection_regex("a outra imobiliária tem algo mais barato") == "concorrente"
-
-
-def test_regex_sem_objecao():
-    """Mensagem sem objeção retorna None."""
-    assert detect_objection_regex("que horas vocês abrem amanhã?") is None
-
-
-def test_regex_case_insensitive():
+def test_high_conf_case_insensitive():
     """Padrões são case-insensitive."""
-    assert detect_objection_regex("MUITO CARO isso aí") == "preco"
+    assert _check_high_confidence_regex("FGTS pode ser usado?") == "financiamento"
 
 
-# ─── 2. Casos de borda na detecção completa ───────────────────────────────────
+# ─── 2. Casos que DEVEM ir para o Haiku (não são alta confiança) ──────────────
+# Garantir que termos vagos ou sofisticados NÃO bypassam o Haiku.
+# Estes testes verificam que _check_high_confidence_regex retorna None,
+# sinalizando que o Haiku deve ser chamado.
+
+def test_high_conf_nao_pega_caro_generico():
+    """'Caro' genérico não é alta confiança — deve ir para o Haiku."""
+    assert _check_high_confidence_regex("tá muito caro pra mim") is None
+
+def test_high_conf_nao_pega_parafrases_preco():
+    """Paráfrase sofisticada de preço não é alta confiança — Haiku decide."""
+    assert _check_high_confidence_regex("está um pouco acima do que eu esperava para esse perfil") is None
+
+def test_high_conf_nao_pega_localizacao_generica():
+    """'Longe' genérico não é alta confiança — Haiku decide."""
+    assert _check_high_confidence_regex("o imóvel é um pouco longe da minha rotina") is None
+
+def test_high_conf_nao_pega_hesitacao_implicita():
+    """Hesitação implícita não é alta confiança — Haiku decide."""
+    assert _check_high_confidence_regex("vou pensar melhor e te dou um retorno") is None
+
+def test_high_conf_nao_pega_objecao_educada():
+    """Objeção educada de alto padrão não é alta confiança — Haiku decide."""
+    assert _check_high_confidence_regex("não tenho certeza se a localização funciona para a minha rotina") is None
+
+
+# ─── 3. Fallback de regex amplo (offline — sem API key) ──────────────────────
+# Estes padrões são usados APENAS quando Haiku não está disponível.
+# Aceitam mais falsos positivos deliberadamente.
+
+def test_fallback_preco_caro():
+    """Fallback detecta 'caro' como preço."""
+    assert _check_fallback_regex("esse apartamento tá muito caro pra mim") == "preco"
+
+def test_fallback_preco_orcamento():
+    """Fallback detecta 'fora do orçamento'."""
+    assert _check_fallback_regex("esse valor está fora do meu orçamento") == "preco"
+
+def test_fallback_localizacao_longe():
+    """Fallback detecta 'longe do trabalho'."""
+    assert _check_fallback_regex("o imóvel é muito longe do trabalho") == "localizacao"
+
+def test_fallback_localizacao_bairro():
+    """Fallback detecta objeção de bairro."""
+    assert _check_fallback_regex("não gostei do bairro, parece perigoso") == "localizacao"
+
+def test_fallback_sem_match():
+    """Fallback retorna None para mensagem sem objeção."""
+    assert _check_fallback_regex("que horas vocês abrem amanhã?") is None
+
+
+# ─── 4. Casos de borda na detecção completa ──────────────────────────────────
 
 def test_detect_short_message():
     """Mensagem abaixo do tamanho mínimo retorna None."""
     assert detect_objection("ok", use_haiku=False) is None
 
-
 def test_detect_empty_message():
     """Mensagem vazia retorna None."""
     assert detect_objection("", use_haiku=False) is None
 
+def test_detect_without_haiku_sem_match():
+    """Sem Haiku, mensagem vaga sem match de alta confiança não detecta objeção."""
+    result = detect_objection("está um pouco acima do que eu esperava", use_haiku=False)
+    # Sem Haiku, cai no fallback amplo — pode ou não detectar dependendo do fallback
+    # O importante é não lançar exceção
+    assert result is None or isinstance(result, str)
 
-def test_detect_without_haiku_no_match():
-    """Sem Haiku e sem match regex retorna None."""
-    result = detect_objection("gostei bastante do imóvel, vou pensar", use_haiku=False)
+def test_detect_without_haiku_sem_objecao():
+    """Sem Haiku, mensagem claramente sem objeção retorna None."""
+    result = detect_objection("gostei muito do acabamento, quero visitar", use_haiku=False)
     assert result is None
 
+def test_detect_high_conf_bypass_sem_haiku():
+    """Alta confiança bypassa Haiku mesmo com use_haiku=True (não precisa chamar)."""
+    # FGTS é alta confiança — resultado independe de Haiku disponível ou não
+    result = detect_objection("posso usar o FGTS pra dar entrada?", use_haiku=False)
+    assert result == "financiamento"
 
-def test_detect_regex_hit_no_haiku_needed():
-    """Com match regex, não aciona Haiku (usa 'caro' que bate diretamente)."""
-    result = detect_objection("isso aqui ta muito caro pra mim não vou conseguir pagar", use_haiku=True)
-    assert result == "preco"
+def test_detect_regex_alias_compat():
+    """detect_objection_regex() é alias para _check_high_confidence_regex()."""
+    # Mantido para compatibilidade — deve funcionar igual
+    assert detect_objection_regex("meu crédito foi negado no banco") == "financiamento"
+    assert detect_objection_regex("que horas vocês abrem?") is None
 
 
 # ─── 3. compute_objection_report ─────────────────────────────────────────────

@@ -10,19 +10,29 @@ Fluxo de detecção (wiring no whatsapp_webhook.py):
     # Após cálculo de score, fire-and-forget:
     asyncio.create_task(detect_and_save_objection(sender, body, client_id))
 
-Pipeline de detecção:
-    1. Regex — rápido, sem custo. Cobre ~80% dos casos.
-    2. Claude Haiku — fallback para mensagens substantivas sem match regex.
-       Custo: ~$0.001 por chamada. Skippado se ANTHROPIC_API_KEY ausente.
+Pipeline de detecção — Haiku PRIMEIRO, regex como atalho:
+    1. Regex de alta confiança — bypass imediato em casos óbvios (sem custo, ~microsegundos).
+       Só é considerado "match de alta confiança" se o padrão for específico o suficiente
+       para ser inequívoco (ex: "FGTS", "score baixo", "prazo de entrega").
+    2. Claude Haiku — classificador primário para toda mensagem substantiva.
+       Recebe contexto da conversa (persona da Sofia + produto imobiliário premium).
+       Retorna categoria ou "nenhuma". Custo: ~$0.001/chamada. Irrelevante frente
+       ao custo de perder uma objeção de lead de R$2M+.
+    3. Fallback de regex amplo — usado APENAS quando Haiku não está disponível
+       (ANTHROPIC_API_KEY ausente). Nunca é o caminho principal.
+
+    Princípio: leads de alto padrão não dizem "tá caro". Dizem "está um pouco
+    acima do que eu esperava para esse perfil de imóvel". O Haiku entende isso.
+    O regex, não.
 
 Categorias mapeadas:
-    preco         — preço alto, caro, fora do orçamento
-    prazo         — prazo de entrega longo, quando fica pronto
-    localizacao   — bairro, longe, localização ruim
-    financiamento — financiamento, banco, crédito, FGTS, score
+    preco         — preço alto, caro, fora do orçamento, expectativa de valor
+    prazo         — prazo de entrega longo, quando fica pronto, não quer esperar
+    localizacao   — bairro, longe, localização ruim, rotina incompatível
+    financiamento — financiamento, banco, crédito, FGTS, score, entrada
     condominio    — taxa de condomínio ou IPTU caro
-    concorrente   — comparação com outro produto/imobiliária
-    outros        — objeção detectada mas não classificada
+    concorrente   — comparação com outro produto/imobiliária, outra proposta
+    outros        — objeção detectada mas não classificável nas categorias acima
 
 Migration necessária:
     ALTER TABLE leads
@@ -31,6 +41,7 @@ Migration necessária:
 
 Uso standalone:
     python3 objection_engine.py --classify "o preço tá muito caro"
+    python3 objection_engine.py --classify "está um pouco acima do que eu esperava"
     python3 objection_engine.py --report --client-id demo_imobiliaria_vendas
     python3 objection_engine.py --report --days 30
 """
@@ -83,86 +94,137 @@ CATEGORY_LABELS: dict[str, str] = {
     "outros":        "❓ Outros",
 }
 
-# Padrões por categoria (lowercase — não são case-sensitive)
-# ATENÇÃO: ordem importa — categorias mais específicas primeiro para evitar
-# falsos positivos do padrão genérico 'caro' de preco.
-_PATTERNS: dict[str, list[str]] = {
-    "condominio": [
-        r"condom[iíi]nio",
-        r"taxa\s+de\s+condom[iíi]nio",
-        r"iptu\s+(alto|caro|elevado|absurdo)",
-        r"custo\s+de\s+manuten",
-    ],
-    "concorrente": [
-        r"outra\s+imobili",
-        r"outro\s+empreendimento",
-        r"vi\s+(em\s+outro|num\s+outro|em\s+outra)",
-        r"concorr[eê]nte",
-        r"outra\s+proposta",
-        r"prefiro\s+o\s+outro",
-    ],
+# ─── Padrões de ALTA CONFIANÇA (bypass do Haiku) ─────────────────────────────
+#
+# Estes padrões são usados APENAS como atalho de velocidade — quando o match
+# é tão inequívoco que chamar o Haiku seria redundante.
+#
+# Critério de inclusão: o padrão deve ser ESPECÍFICO o suficiente para que
+# nenhuma outra interpretação seja razoável. Termos vagos (ex: "caro", "longe")
+# NÃO entram aqui — ficam para o Haiku julgar em contexto.
+#
+# Exemplo de raciocínio:
+#   "FGTS" → inequívoco, sempre é contexto de financiamento → entra
+#   "caro" → pode ser comentário positivo ("caro cliente") ou em contexto
+#             irônico → NÃO entra, Haiku decide
+#
+_HIGH_CONFIDENCE_PATTERNS: dict[str, list[str]] = {
     "financiamento": [
-        r"financiamento\s+(negado|recusado|n[aã]o\s+saiu)",
-        r"cr.dito\s+(negado|recusado|n[aã]o\s+passou|ruim)",
-        r"(negado|recusado|rejeitado)\s+(no|pelo)\s+banco",
-        r"score\s+(baixo|ruim)",
         r"\bfgts\b",
-        r"banco\s+(n[aã]o|recusou|negou)",
-        r"(n[aã]o\s+)?consigo\s+financiar",
-        r"restri..o\s+(no\s+cpf|cadastral|financeira)",
-        r"entrada\s+(muito\s+)?(alta|cara|pesada)",
-        r"serasa|spc\b",
+        r"\bserasa\b",
+        r"\bspc\b",
+        r"\bscore\b.{0,30}(baixo|ruim|negativado)",
+        r"financiamento\s+(negado|recusado|n[aã]o\s+saiu|n[aã]o\s+foi\s+aprovado)",
+        r"cr[eé]dito\s+(negado|recusado|n[aã]o\s+passou|bloqueado)",
+        r"(negado|recusado|rejeitado)\s+(no|pelo)\s+banco",
+        r"restri[cç][aã]o\s+(no\s+cpf|cadastral|financeira)",
+        r"nome\s+(sujo|negativado|restrito)",
     ],
     "prazo": [
         r"prazo\s+de\s+entrega",
-        r"quando\s+(fica\s+)?(pronto|entrega[rm]?)",
-        r"demora\s+(muito|demais|\d+\s+anos)",
-        r"muitos?\s+anos?\s+(de\s+)?espera",
         r"data\s+de\s+entrega",
-        r"previs..o\s+de\s+entrega",
+        r"previs[aã]o\s+de\s+entrega",
+        r"quando\s+(fica\s+)?pronto",
+    ],
+    "concorrente": [
+        r"outra\s+imobili",  # cobre imobiliária (á não casa com literal 'a' em regex ASCII)
+        r"outra\s+proposta",
+        r"outro\s+empreendimento",
+        r"j[aá]\s+tenho\s+(uma\s+)?(proposta|oferta)",
+        r"concorr[eê]nte",
+    ],
+    "condominio": [
+        r"taxa\s+de\s+condom[ií]nio",
+        r"condom[ií]nio\s+(muito\s+)?(caro|alto|elevado|absurdo)",
+        r"iptu\s+(muito\s+)?(alto|caro|elevado|absurdo)",
+    ],
+}
+
+# Pré-compila padrões de alta confiança
+_COMPILED_HIGH_CONFIDENCE: dict[str, list[re.Pattern]] = {
+    cat: [re.compile(p, re.IGNORECASE) for p in patterns]
+    for cat, patterns in _HIGH_CONFIDENCE_PATTERNS.items()
+}
+
+# ─── Padrões amplos — fallback APENAS quando Haiku indisponível ───────────────
+#
+# Usados como plano B quando ANTHROPIC_API_KEY não está configurado.
+# Não são o caminho principal. Aceitam mais falsos positivos porque
+# sem Haiku, melhor ter mais dados do que nenhum.
+#
+_FALLBACK_PATTERNS: dict[str, list[str]] = {
+    "condominio": [
+        r"condom[ií]nio",
+        r"iptu\s+(alto|caro|elevado)",
+    ],
+    "concorrente": [
+        r"outra\s+imobiliar",
+        r"outro\s+empreendimento",
+        r"outra\s+proposta",
+        r"concorr[eê]nte",
+    ],
+    "financiamento": [
+        r"\bfgts\b", r"\bserasa\b", r"\bspc\b",
+        r"financiamento\s+(negado|recusado)",
+        r"cr[eé]dito\s+(negado|ruim)",
+        r"score\s+(baixo|ruim)",
+        r"entrada\s+(alta|cara|pesada)",
+    ],
+    "prazo": [
+        r"prazo\s+de\s+entrega",
+        r"quando\s+(fica\s+)?pronto",
+        r"demora\s+(muito|demais)",
         r"n[aã]o\s+quero\s+esperar",
     ],
     "localizacao": [
-        r"localiza..o\s+(ruim|p.ssima|longe|n[aã]o\s+gostei)",
-        r"muito\s+longe\s+(do|da|de)",
-        r"longe\s+(do\s+trabalho|da\s+escola|do\s+metr|do\s+centro)",
-        r"bairro\s+(ruim|perigoso|barulhento|n[aã]o\s+gostei)",
-        r"sem\s+(infraestrutura|transporte|metr|.nibus)",
+        r"muito\s+longe",
+        r"longe\s+(do\s+trabalho|da\s+escola|do\s+metr[ôo])",
+        r"bairro\s+(ruim|perigoso|n[aã]o\s+gostei)",
         r"n[aã]o\s+gostei\s+do\s+bairro",
-        r"longe\s+demais",
-        r"dif.cil\s+(acesso|chegar)",
-        r"tr.nsito\s+(horr.vel|p.ssimo|pesado|terr.vel)",
+        r"tr[âa]nsito\s+(horr[íi]vel|p[éê]ssimo|pesado)",
     ],
     "preco": [
         r"(muito\s+)?caro",
-        r"pre.o\s+(alto|elevado|pesado|abusivo|absurdo)",
-        r"preco\s+(alto|elevado|pesado|abusivo|absurdo)",
-        r"(fora|acima)\s+do\s+(meu\s+)?or.amento",
+        r"pre[çc]o\s+(alto|elevado|abusivo|absurdo)",
+        r"(fora|acima)\s+do\s+(meu\s+)?or[çc]amento",
         r"n[aã]o\s+(consigo|tenho)\s+(pagar|arcar)",
-        r"valor\s+(alto|elevado|pesado|abusivo|absurdo)",
-        r"\bmais\s+barato\b",
+        r"valor\s+(alto|elevado|abusivo)",
+        r"mais\s+barato",
         r"\bdesconto\b",
-        r"\bnegocia[rr]\b",
-        r"n[aã]o\s+cabe\s+no\s+(meu\s+)?bolso",
     ],
     "outros": [],
 }
 
-# Pré-compila todos os padrões
-_COMPILED: dict[str, list[re.Pattern]] = {
+_COMPILED_FALLBACK: dict[str, list[re.Pattern]] = {
     cat: [re.compile(p, re.IGNORECASE) for p in patterns]
-    for cat, patterns in _PATTERNS.items()
+    for cat, patterns in _FALLBACK_PATTERNS.items()
 }
 
 
-# ─── Detecção por regex ───────────────────────────────────────────────────────
-def detect_objection_regex(message: str) -> Optional[str]:
+# ─── Atalho de alta confiança (regex inequívoco) ─────────────────────────────
+def _check_high_confidence_regex(message: str) -> Optional[str]:
     """
-    Tenta classificar a objeção via regex.
-    Retorna a categoria ou None se não detectou.
-    Determinístico, sem custo, ~microsegundos.
+    Verifica padrões inequívocos que dispensam o Haiku.
+    Só retorna categoria se o match for específico o suficiente para que
+    nenhuma outra interpretação seja razoável (ex: "FGTS", "crédito negado").
+    Retorna None para qualquer ambiguidade — o Haiku decide.
     """
-    for category, compiled_patterns in _COMPILED.items():
+    for category, compiled_patterns in _COMPILED_HIGH_CONFIDENCE.items():
+        for pattern in compiled_patterns:
+            if pattern.search(message):
+                return category
+    return None
+
+
+def _check_fallback_regex(message: str) -> Optional[str]:
+    """
+    Regex amplo usado APENAS quando Haiku não está disponível.
+    Aceita mais falsos positivos deliberadamente — sem Haiku, melhor
+    ter dados imperfeitos do que nenhum dado.
+    """
+    for category, compiled_patterns in _COMPILED_FALLBACK.items():
+        if not compiled_patterns:
+            continue
         for pattern in compiled_patterns:
             if pattern.search(message):
                 return category
@@ -172,32 +234,41 @@ def detect_objection_regex(message: str) -> Optional[str]:
 # ─── Classificação via Claude Haiku ──────────────────────────────────────────
 def classify_with_haiku(message: str) -> Optional[str]:
     """
-    Usa Claude Haiku para classificar objeção quando regex não detectou.
-    Retorna categoria ou None se não houver objeção.
+    Classificador primário de objeções.
 
-    Custo: ~$0.001 por chamada.
-    Skippado automaticamente se ANTHROPIC_API_KEY não estiver configurado.
+    Recebe a mensagem do lead e retorna a categoria da objeção ou None.
+    Entende paráfrases, linguagem sofisticada, objeções implícitas e
+    expressões regionais — o que regex estruturalmente não consegue.
+
+    Custo: ~$0.001/chamada. Para leads de R$2M+, o custo de perder
+    uma objeção é ordens de magnitude maior.
+
+    Retorna None se não houver objeção na mensagem.
+    Retorna "outros" se houver objeção mas não se encaixar nas categorias.
     """
     if not ANTHROPIC_API_KEY:
         return None
 
     categories_desc = "\n".join([
-        "- preco: preço alto, fora do orçamento, caro, quer desconto",
-        "- prazo: prazo de entrega longo, demora, não quer esperar",
-        "- localizacao: bairro ruim, localização distante ou problemática",
-        "- financiamento: crédito negado, score baixo, FGTS, renda insuficiente",
-        "- condominio: taxa de condomínio ou IPTU caro",
-        "- concorrente: já tem outra proposta ou preferência por outro produto",
-        "- outros: objeção que não se encaixa nas outras categorias",
-        "- nenhuma: não há objeção nesta mensagem",
+        "- preco: valor acima da expectativa, fora do orçamento, quer negociar, acha caro (mesmo sem usar a palavra)",
+        "- prazo: prazo de entrega longo, demora para ficar pronto, não quer esperar",
+        "- localizacao: bairro não funciona para a rotina, localização distante ou problemática",
+        "- financiamento: crédito negado, score baixo, FGTS, entrada alta, dificuldade de aprovação",
+        "- condominio: taxa de condomínio ou IPTU acima do esperado",
+        "- concorrente: já tem outra proposta, está comparando com outro produto ou imobiliária",
+        "- outros: há uma objeção clara mas não se encaixa nas categorias acima",
+        "- nenhuma: não há objeção — pode ser dúvida, elogio, agendamento, saudação ou qualquer coisa sem resistência",
     ])
 
     prompt = (
-        f"Classifique a objeção na mensagem abaixo em UMA categoria.\n"
-        f"Responda APENAS com o nome da categoria, nada mais.\n\n"
+        "Você analisa mensagens de leads interessados em imóveis de alto padrão no Brasil (R$2M+).\n"
+        "Identifique se há uma OBJEÇÃO na mensagem abaixo e classifique em UMA categoria.\n"
+        "Objeção = qualquer sinal de resistência, hesitação, barreira ou preocupação que pode "
+        "impedir a compra. Pode ser explícita ('tá caro') ou implícita ('está um pouco acima do que eu esperava').\n"
+        "Responda APENAS com o nome da categoria, nada mais.\n\n"
         f"Categorias:\n{categories_desc}\n\n"
-        f'Mensagem: "{message}"\n\n'
-        f"Categoria:"
+        f'Mensagem do lead: "{message}"\n\n'
+        "Categoria:"
     )
 
     payload = json.dumps({
@@ -228,6 +299,7 @@ def classify_with_haiku(message: str) -> Optional[str]:
                 return None
             if category in OBJECTION_CATEGORIES:
                 return category
+            log.debug("Haiku retornou categoria desconhecida '%s' — mapeando para 'outros'", category)
             return "outros"
     except Exception as e:
         log.warning("Haiku classification failed: %s", e)
@@ -237,23 +309,43 @@ def classify_with_haiku(message: str) -> Optional[str]:
 # ─── Detecção completa ────────────────────────────────────────────────────────
 def detect_objection(message: str, use_haiku: bool = True) -> Optional[str]:
     """
-    Pipeline completo de detecção:
-    1. Regex (rápido, sem custo)
-    2. Claude Haiku se regex não detectou e mensagem é substantiva
+    Pipeline de detecção com Haiku como classificador primário.
+
+    Ordem:
+    1. Filtra mensagens curtas/vazias — sem custo.
+    2. Regex de alta confiança — bypass do Haiku em casos inequívocos
+       (ex: "FGTS", "crédito negado", "prazo de entrega"). Sem falsos positivos.
+    3. Claude Haiku — classificador principal para todo o resto.
+       Entende paráfrases, linguagem sofisticada, objeções implícitas.
+    4. Regex amplo — fallback APENAS se Haiku indisponível (sem API key).
+       Aceita mais falsos positivos; melhor que nenhum dado.
 
     Retorna categoria ou None.
     """
     if not message or len(message.strip()) < MIN_MSG_LEN:
         return None
 
-    category = detect_objection_regex(message)
-    if category:
-        return category
+    # Passo 1: atalho inequívoco — sem custo, sem ambiguidade
+    high_conf = _check_high_confidence_regex(message)
+    if high_conf:
+        log.debug("Objeção detectada via regex alta confiança: %s", high_conf)
+        return high_conf
 
+    # Passo 2: Haiku como classificador primário
     if use_haiku and ANTHROPIC_API_KEY:
         return classify_with_haiku(message)
 
-    return None
+    # Passo 3: fallback sem Haiku — regex amplo
+    return _check_fallback_regex(message)
+
+
+# Mantido para compatibilidade com testes legados que chamam diretamente
+def detect_objection_regex(message: str) -> Optional[str]:
+    """
+    Alias legado. Em produção, usar detect_objection() que inclui Haiku.
+    Verifica APENAS os padrões de alta confiança (inequívocos).
+    """
+    return _check_high_confidence_regex(message)
 
 
 # ─── Supabase helpers ─────────────────────────────────────────────────────────
