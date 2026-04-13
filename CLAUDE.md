@@ -755,4 +755,51 @@ python3 /opt/ImobOne-v2/nightly_squad.py --dry-run
 python3 /opt/ImobOne-v2/nightly_squad.py --task-id multi-corretor-routing
 ```
 
-**R
+**Restrição arquitetural inegociável:** Deploy Agent nunca faz merge. Para no PR. Operador aprova pela manhã.
+
+### Bugs corrigidos no Nightly Squad — ✅ Abril 2026
+
+Identificados nos logs da primeira execução real (02:00 de 13/04/2026). Três problemas corrigidos:
+
+| Bug | Causa | Fix |
+|-----|-------|-----|
+| Notificação WhatsApp não chegou | `urllib.request` rejeita certificado self-signed da Evolution API com `SSL: CERTIFICATE_VERIFY_FAILED` | `_notify()` trocado para `httpx.Client(verify=False)` — mesmo padrão do `whatsapp_webhook.py` |
+| Dev Agent falhou 9/9 tentativas (`Não foi possível parsear JSON`) | LLM gerava código Python embrulhado em strings JSON — newlines, `"`, regex com `\b` quebravam o parser | Formato de resposta trocado de JSON para tags XML `<file path="...">` e `<test path="...">` — imune a escaping de código |
+| QA Agent falhou com `FileNotFoundError: pytest` | `pytest` não estava instalado no venv `/opt/webhook-venv` | `pip install pytest` executado no venv; `VENV_PYTEST` já apontava para o caminho correto |
+
+**Instância WhatsApp `devlabz`:** desconectou durante a madrugada (`state: close`) — reconectada via QR code em 13/04/2026, `state: open` confirmado. Quando desconectar novamente: `curl -sk https://api.otaviolabs.com/instance/connect/devlabz -H 'apikey: ...'` retorna `base64` do QR para escanear.
+
+**Decisões técnicas registradas (não reabrir):**
+- `_notify()` usa `httpx` com `verify=False` — Evolution API usa cert self-signed. Não reverter para `urllib.request`.
+- Dev Agent usa formato XML `<file>/<test>` — não JSON. JSON com código Python embrulhado em strings é inerentemente frágil.
+- `pytest` é dependência obrigatória do venv. Incluir em qualquer nova instalação de venv.
+
+---
+
+### Report Engine semanal executivo — ✅ Abril 2026
+
+`report_engine.py` — engine de relatório semanal para o dono da imobiliária.
+
+**Métricas calculadas:** total_leads, visitas_confirmadas, leads_quentes, pipeline_estimado_brl, top_objecao, taxa_conversao, leads_por_origem. Dados buscados direto do Supabase (`leads` + `followup_events`).
+
+**Outputs:**
+- WhatsApp ao operador com resumo executivo formatado
+- PDF via reportlab salvo em `clients/{client_id}/reports/`
+- CSV para exportação em reuniões
+
+**Endpoints no Pipeline Runner (porta 8003):**
+- `GET /reports/weekly?client_id=...` — gera e envia relatório + retorna métricas
+- `GET /reports/history?client_id=...&limit=10` — lista relatórios salvos
+- `GET /reports/export/csv?client_id=...` — download CSV do relatório mais recente
+- `GET /reports/export/pdf?client_id=...` — download PDF do relatório mais recente
+
+**Testes:** 36 testes unitários em `tests/test_report_engine.py` — 36/36 passando no VPS.
+
+**Dependências adicionadas:** `reportlab` instalado em `/opt/webhook-venv`.
+
+**Decisão de deploy:** workflow padrão — SCP do Cowork para VPS (contorna OneDrive/git local quebrado). Git commitado diretamente no VPS após validação.
+
+---
+
+*Última atualização: Abril 2026 — Report Engine semanal executivo deployado (report_engine.py + 4 endpoints /reports/*). 36 testes passando. pipeline_runner.py corrigido (truncamento na linha 420). Nightly Squad executou pela primeira vez em produção (02:00 de 13/04) — 3 bugs corrigidos: SSL notify, Dev Agent XML format, pytest instalado. WhatsApp devlabz reconectado (state: open). Pipeline Runner ativo (porta 8003). Fase 3 mapeada. CRM 6 adapters. Backlog: 11 tasks — 4 critical. Pendente: 360dialog para primeiro cliente real.*
+*Este documento é a fonte da verdade do projeto. Qualquer decisão que conflite com ele deve passar pelo arquiteto auditor antes de ser implementada.*
