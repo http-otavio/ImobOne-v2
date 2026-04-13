@@ -1565,6 +1565,67 @@ async def _marcar_fotos_enviadas(sender: str, imovel_id: str):
     _memory_history[f"fotos:{sender}"].add(imovel_id)
 
 
+
+async def _update_pipeline_value(sender: str, imovel_id: str) -> None:
+    """
+    Recalcula pipeline_value_brl do lead somando os valores dos imóveis
+    cujas fotos já foram enviadas + o imóvel atual.
+    Atualiza Supabase fire-and-forget.
+    """
+    sb = _get_supabase()
+    portfolio = _load_portfolio_dict()
+    if not sb or not portfolio:
+        return
+    try:
+        key = f"whatsapp:fotos_enviadas:{sender}"
+        if redis_client:
+            try:
+                existing = await redis_client.smembers(key)
+                imovel_ids = {m.decode() if isinstance(m, bytes) else m for m in existing}
+            except Exception:
+                imovel_ids = _memory_history.get(f"fotos:{sender}", set()).copy()
+        else:
+            imovel_ids = _memory_history.get(f"fotos:{sender}", set()).copy()
+
+        imovel_ids.add(imovel_id)
+
+        total_brl = 0.0
+        ids_validos = []
+        for iid in sorted(imovel_ids):
+            imovel = portfolio.get(iid, {})
+            valor_raw = imovel.get("valor", "")
+            if not valor_raw:
+                continue
+            try:
+                valor = float(str(valor_raw).replace("R$", "").replace(".", "").replace(",", ".").strip())
+                total_brl += valor
+                ids_validos.append(iid)
+            except (ValueError, TypeError):
+                log.warning("pipeline: valor invalido para imovel %s: %s", iid, valor_raw)
+
+        if not ids_validos:
+            return
+
+        from datetime import datetime, timezone
+        data = {
+            "client_id":           _ctx_client_id(),
+            "lead_phone":          sender,
+            "pipeline_value_brl":  round(total_brl, 2),
+            "pipeline_imovel_ids": ids_validos,
+            "pipeline_updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: (
+            sb.table("leads")
+              .upsert(data, on_conflict="client_id,lead_phone")
+              .execute()
+        ))
+        log.info("Pipeline atualizado: %s -> R$ %,.2f (%s)", sender, total_brl, ", ".join(ids_validos))
+    except Exception as e:
+        log.warning("Falha ao atualizar pipeline_value_brl: %s", e)
+
+
+
 # ─── Pipeline principal — com lock por sender ─────────────────────────────────
 
 # ─── Comandos de operador via WhatsApp ───────────────────────────────────────
@@ -1833,6 +1894,7 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
             await asyncio.sleep(1)
             await loop.run_in_executor(None, dispatch_photos, sender, imovel_id_foto)
             await _marcar_fotos_enviadas(sender, imovel_id_foto)
+            asyncio.create_task(_update_pipeline_value(sender, imovel_id_foto))
 
 
 # Alias para compatibilidade com código legado
