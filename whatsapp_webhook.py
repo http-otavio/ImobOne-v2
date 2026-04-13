@@ -1961,6 +1961,13 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
         # ── Atualiza score de intenção ─────────────────────────────────────────
         new_score, score_delta, score_breakdown = await _update_lead_score(sender, user_message)
 
+        # ── Detecta objeção na mensagem do lead (fire-and-forget) ────────────
+        try:
+            from objection_engine import detect_and_save_objection as _detect_obj
+            asyncio.create_task(_detect_obj(sender, user_message, _ctx_client_id()))
+        except ImportError:
+            pass  # objection_engine opcional — não bloqueia o fluxo
+
         # ── Consulta LLM ──────────────────────────────────────────────────────
         history = await get_history(redis_client, sender)
         reply   = await run_consultant(history, user_message)

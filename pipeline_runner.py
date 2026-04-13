@@ -436,6 +436,18 @@ def _get_report_engine():
         return None
 
 
+def _get_objection_engine():
+    """Importa objection_engine lazily para não quebrar se não estiver instalado."""
+    try:
+        if str(BASE_DIR) not in sys.path:
+            sys.path.insert(0, str(BASE_DIR))
+        import objection_engine as oe_mod
+        return oe_mod
+    except ImportError as e:
+        log.warning("objection_engine não disponível: %s", e)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints de relatório
 # ---------------------------------------------------------------------------
@@ -510,6 +522,45 @@ async def export_report_pdf(client_id: str = "demo_imobiliaria_vendas"):
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/reports/objections")
+def get_objection_report(
+    client_id: str = "demo_imobiliaria_vendas",
+    period: str = "week",
+    days: int = Query(default=0, ge=0, le=365),
+):
+    """
+    Retorna ranking de objeções do período para o client_id.
+
+    Parâmetros:
+        client_id — ID do cliente (padrão: demo_imobiliaria_vendas)
+        period    — 'week' (7d), 'month' (30d) ou ignorado se days > 0
+        days      — número exato de dias (override de period se > 0)
+
+    Retorna:
+        total_leads, leads_com_objecao, taxa_objecao_pct,
+        top_objections (top 3 com count e pct_leads),
+        breakdown (todas as categorias)
+    """
+    oe_mod = _get_objection_engine()
+    if not oe_mod:
+        raise HTTPException(status_code=503, detail="objection_engine não disponível")
+
+    # Resolve período
+    if days > 0:
+        n_days = days
+    elif period == "month":
+        n_days = 30
+    else:
+        n_days = 7  # default: semana
+
+    try:
+        report = oe_mod.compute_objection_report(client_id=client_id, days=n_days)
+        return {"status": "ok", "report": report}
+    except Exception as e:
+        log.error("Erro ao gerar relatório de objeções: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
