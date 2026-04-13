@@ -2,54 +2,97 @@
   "_comentario": "Dados fictícios para smoke test da Fase 2. Imobiliária de vendas em São Paulo, segmento alto padrão, 3 corretores, sem CRM externo.",
   "client_id": "demo_imobiliaria_vendas",
   "versao_schema": "1.0",
-
   "imobiliaria": {
     "nome_imobiliaria": "Ávora Imóveis",
     "cidade_atuacao": "São Paulo",
-    "segmentos": ["vendas"],
+    "segmentos": [
+      "vendas"
+    ],
     "site": "https://www.avoraimoveis.com.br",
-    "portais_anuncio": ["ZAP Imóveis", "VivaReal", "Site próprio"],
-    "ticket_medio_vendas": 2800000.00,
+    "portais_anuncio": [
+      "ZAP Imóveis",
+      "VivaReal",
+      "Site próprio"
+    ],
+    "ticket_medio_vendas": 2800000.0,
     "ticket_medio_aluguel": null,
     "ticket_medio_temporada": null
   },
-
   "portfolio": {
     "portfolio_path": "clients/demo_imobiliaria_vendas/portfolio.csv",
     "portfolio_url": null,
     "total_imoveis_estimado": 87
   },
-
   "corretores": [
     {
       "nome": "Renata Cavalcanti",
       "telefone_whatsapp": "+5511998001001",
-      "especialidade": ["vendas"],
-      "bairros_regioes": ["Jardins", "Itaim Bibi", "Vila Nova Conceição"],
+      "especialidade": [
+        "vendas"
+      ],
+      "bairros_regioes": [
+        "Jardins",
+        "Itaim Bibi",
+        "Vila Nova Conceição"
+      ],
       "horario_inicio": "09:00",
       "horario_fim": "19:00",
-      "dias_atendimento": ["seg", "ter", "qua", "qui", "sex", "sab"]
+      "dias_atendimento": [
+        "seg",
+        "ter",
+        "qua",
+        "qui",
+        "sex",
+        "sab"
+      ],
+      "corretor_email": "renata.cavalcanti@demo-imobiliaria.com.br"
     },
     {
       "nome": "Marcelo Drummond",
       "telefone_whatsapp": "+5511998002002",
-      "especialidade": ["vendas"],
-      "bairros_regioes": ["Moema", "Vila Olímpia", "Brooklin"],
+      "especialidade": [
+        "vendas"
+      ],
+      "bairros_regioes": [
+        "Moema",
+        "Vila Olímpia",
+        "Brooklin"
+      ],
       "horario_inicio": "09:00",
       "horario_fim": "18:00",
-      "dias_atendimento": ["seg", "ter", "qua", "qui", "sex"]
+      "dias_atendimento": [
+        "seg",
+        "ter",
+        "qua",
+        "qui",
+        "sex"
+      ],
+      "corretor_email": "marcelo.drummond@demo-imobiliaria.com.br"
     },
     {
       "nome": "Isabela Fontana",
       "telefone_whatsapp": "+5511998003003",
-      "especialidade": ["vendas"],
-      "bairros_regioes": ["Pinheiros", "Alto de Pinheiros", "Perdizes", "Pompeia"],
+      "especialidade": [
+        "vendas"
+      ],
+      "bairros_regioes": [
+        "Pinheiros",
+        "Alto de Pinheiros",
+        "Perdizes",
+        "Pompeia"
+      ],
       "horario_inicio": "10:00",
       "horario_fim": "20:00",
-      "dias_atendimento": ["ter", "qua", "qui", "sex", "sab"]
+      "dias_atendimento": [
+        "ter",
+        "qua",
+        "qui",
+        "sex",
+        "sab"
+      ],
+      "corretor_email": "isabela.fontana@demo-imobiliaria.com.br"
     }
   ],
-
   "consultor": {
     "nome_consultor": "Sofia",
     "genero": "feminino",
@@ -67,31 +110,41 @@
       "Fico feliz em ter ajudado. Nossa equipe está à sua disposição. Até breve!"
     ],
     "palavras_proibidas": [
-      "barato", "promocional", "oferta", "negócio da china",
-      "super desconto", "oportunidade imperdível", "imperdível",
-      "mais em conta", "precinho"
+      "barato",
+      "promocional",
+      "oferta",
+      "negócio da china",
+      "super desconto",
+      "oportunidade imperdível",
+      "imperdível",
+      "mais em conta",
+      "precinho"
     ],
     "palavras_preferidas": [
-      "exclusivo", "curadoria", "patrimônio", "bem localizado",
-      "referência", "sofisticado", "bem-estar", "lifestyle",
-      "empreendimento", "entrega"
+      "exclusivo",
+      "curadoria",
+      "patrimônio",
+      "bem localizado",
+      "referência",
+      "sofisticado",
+      "bem-estar",
+      "lifestyle",
+      "empreendimento",
+      "entrega"
     ]
   },
-
   "whatsapp": {
     "numero_whatsapp": "+5511930000001",
     "bsp_provider": "360dialog",
     "bsp_api_key": "DEMO_360DIALOG_API_KEY_SUBSTITUIR",
     "bsp_url": null
   },
-
   "distribuicao": {
     "estrategia": "por_bairro",
     "timeout_corretor_minutos": 20,
     "acao_sem_resposta_corretor": "notificar_proximo_da_lista",
     "notificar_corretor_score_minimo": 7
   },
-
   "qualificacao": {
     "vendas": {
       "perguntas_obrigatorias": [
@@ -123,12 +176,14 @@
     "lancamentos": null,
     "temporada": null
   },
-
   "regras": {
     "pode_falar_desconto": true,
     "desconto_maximo_percent": 3.0,
     "parceiros_financiamento": [
-      "Itaú BBA", "Bradesco Prime", "Santander Select", "Caixa Econômica Federal"
+      "Itaú BBA",
+      "Bradesco Prime",
+      "Santander Select",
+      "Caixa Econômica Federal"
     ],
     "garantias_aceitas_aluguel": [],
     "regras_adicionais": [
@@ -139,31 +194,30 @@
       "Não prometer exclusividade de proposta sem confirmação do corretor responsável"
     ]
   },
-
   "midia": {
     "foto_config": "4_fotos_mais_link",
     "max_fotos_envio": 4,
     "mensagem_link": "Veja todas as fotos e detalhes completos do imóvel em nosso site:"
   },
-
   "crm": {
     "crm_nome": null,
     "crm_webhook_url": null,
     "crm_api_key": null,
     "campos_customizados": {}
   },
-
   "horarios": {
     "horario_inicio": "08:00",
     "horario_fim": "20:00",
     "atende_sabado": true,
     "atende_domingo": false,
     "feriados_nacionais": true,
-    "feriados_locais": ["2026-07-25", "2026-11-20"],
+    "feriados_locais": [
+      "2026-07-25",
+      "2026-11-20"
+    ],
     "comportamento_fora_horario": "informar_horario_e_registrar_lead",
     "mensagem_fora_horario": "Olá! Nosso horário de atendimento é de {horario_inicio} às {horario_fim}, de segunda a sábado. Registrei sua mensagem com carinho e {nome_consultor} entrará em contato assim que possível. Até logo!"
   },
-
   "escalacao": {
     "gatilhos_escalacao": [
       "Lead solicita falar diretamente com um corretor",
@@ -179,7 +233,6 @@
     "contato_alerta": "+5511998000000",
     "escalar_apos_n_mensagens_sem_resolucao": 6
   },
-
   "dashboard": {
     "usuarios_dashboard": [
       "gestor@avoraimoveis.com.br",

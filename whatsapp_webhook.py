@@ -98,6 +98,11 @@ def _ctx_corretor_cooldown() -> int:
     return int(_client_ctx.get().get("corretor_cooldown_hours", CORRETOR_COOLDOWN_HOURS))
 
 
+def _ctx_corretor_email() -> str:
+    """Retorna e-mail do corretor principal configurado no onboarding."""
+    return _client_ctx.get().get("corretor_email", os.getenv("CORRETOR_EMAIL", ""))
+
+
 def _ctx_voice_id() -> str:
     return _client_ctx.get().get("elevenlabs_voice_id", ELEVENLABS_VOICE_ID)
 
@@ -141,6 +146,7 @@ def _load_clients_registry() -> dict[str, dict]:
             "corretor_number":            CORRETOR_NUMBER,
             "corretor_score_threshold":   CORRETOR_SCORE_THRESHOLD,
             "corretor_cooldown_hours":    CORRETOR_COOLDOWN_HOURS,
+            "corretor_email":             os.getenv("CORRETOR_EMAIL", ""),
             "elevenlabs_voice_id":        ELEVENLABS_VOICE_ID,
         }
     }
@@ -1566,6 +1572,108 @@ async def _marcar_fotos_enviadas(sender: str, imovel_id: str):
 
 
 
+
+async def _create_calendar_event_for_visit(
+    sender: str,
+    reply: str,
+    history: list[dict],
+) -> None:
+    """
+    Cria evento no Google Calendar do corretor quando visita é confirmada.
+    Fire-and-forget — nunca bloqueia o fluxo principal.
+    """
+    try:
+        from tools.calendar import create_calendar_event, format_imovel_descricao
+    except ImportError:
+        log.warning("calendar: tools/calendar.py não disponível")
+        return
+
+    corretor_email = _ctx_corretor_email()
+    if not corretor_email:
+        log.debug("calendar: corretor_email não configurado — pulando criação de evento")
+        return
+
+    try:
+        # Dados do lead
+        lead_data = _memory_leads.get(sender, {}) if hasattr(sys.modules[__name__], "_memory_leads") else {}
+        lead_name  = lead_data.get("lead_name", "") or ""
+        lead_phone = sender
+
+        # Imóvel de interesse (último enviado via FOTOS)
+        portfolio = _load_portfolio_dict()
+        imovel_id = ""
+        imovel_descricao = ""
+        if redis_client:
+            try:
+                key = f"whatsapp:fotos_enviadas:{sender}"
+                sent = await redis_client.smembers(key)
+                ids = sorted(m.decode() if isinstance(m, bytes) else m for m in sent)
+                if ids:
+                    imovel_id = ids[-1]
+            except Exception:
+                pass
+        if not imovel_id:
+            # Tenta pegar do histórico: último [FOTOS:ID] mencionado
+            import re as _re
+            for msg in reversed(history or []):
+                m = _re.search(r"\[FOTOS:([A-Z0-9]+)\]", msg.get("content", ""))
+                if m:
+                    imovel_id = m.group(1)
+                    break
+
+        imovel = portfolio.get(imovel_id, {})
+        imovel_descricao = format_imovel_descricao(imovel) if imovel else imovel_id
+
+        # Parseia data/hora da visita
+        visit_dt = _parse_visit_datetime_from_reply(reply) if reply else None
+
+        # Resumo via Haiku (fire-and-forget, aceita falha)
+        resumo = ""
+        if history and ANTHROPIC_API_KEY:
+            try:
+                import anthropic
+                client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+                hist_text = "\n".join(
+                    f"{m['role'].upper()}: {m['content'][:200]}"
+                    for m in (history or [])[-8:]
+                )
+                resp = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=300,
+                    system=(
+                        "Você resume conversas de atendimento imobiliário em 3 bullets curtos. "
+                        "Formato: • Interesse: ... • Budget: ... • Observação: ..."
+                        "A resposta deve conter APENAS o resumo. Não inclua prefixos."
+                    ),
+                    messages=[{"role": "user", "content": f"Histórico:\n{hist_text}"}],
+                )
+                resumo = resp.content[0].text.strip()
+            except Exception as e:
+                log.debug("calendar: resumo Haiku falhou: %s", e)
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: create_calendar_event(
+                corretor_email=corretor_email,
+                lead_name=lead_name,
+                lead_phone=lead_phone,
+                imovel_id=imovel_id,
+                imovel_descricao=imovel_descricao,
+                visit_dt=visit_dt,
+                resumo_conversa=resumo,
+            ),
+        )
+        if result.success:
+            log.info("Calendar: evento criado para %s | link: %s", corretor_email, result.event_link)
+        else:
+            log.debug("Calendar: %s", result.error)
+
+    except Exception as e:
+        log.warning("_create_calendar_event_for_visit: %s", e)
+
+
+
 async def _update_pipeline_value(sender: str, imovel_id: str) -> None:
     """
     Recalcula pipeline_value_brl do lead somando os valores dos imóveis
@@ -1847,6 +1955,7 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
         # ── Detecta confirmação de visita na resposta da Sofia ───────────────
         if _detect_visit_confirmation(reply_clean):
             asyncio.create_task(_supabase_confirm_visit(sender, reply_clean))
+            asyncio.create_task(_create_calendar_event_for_visit(sender, reply_clean, history))
 
         # ── Extrai perfil estruturado do lead após N turnos ──────────────────────
         if len([m for m in history if m.get("role") == "user"]) >= _PROFILE_EXTRACTION_TURNS:
