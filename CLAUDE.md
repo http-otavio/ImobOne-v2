@@ -583,6 +583,35 @@ result = await push_lead_to_crm(onboarding, lead_payload, client_id="demo_01")
 
 ---
 
+## ICP — Persona primária: Dono da imobiliária / Dono da construtora
+
+> **Regra de ouro:** toda feature nova deve primeiro responder à pergunta "o que o dono enxerga ou ganha com isso?". Corretores são usuários do sistema, não o ICP.
+
+**Quem é o ICP:**
+- Dono de imobiliária de alto padrão (3–50 corretores, carteira R$ 2M+)
+- Dono / sócio de construtora de médio/alto padrão com lançamentos
+- Diretor comercial com autonomia de compra de tecnologia
+
+**O que o dono precisa ver/ter:**
+- **Relatório semanal automático** no WhatsApp com: leads atendidos, visitas, pipeline estimado em R$, top objeção da semana — sem precisar entrar em dashboard
+- **Dashboard corporativo** com KPIs executivos: pipeline ativo em R$, taxa de conversão Sofia → visita, leads por origem (portal, WhatsApp orgânico, indicação), satisfação pós-visita
+- **Exportação** de todos os relatórios em PDF e CSV para apresentar em reuniões de sócio ou board
+- **Inteligência de mercado** gerada pela base de conversas: objeções recorrentes, perfil dos leads que convertem, bairros de maior demanda
+- **Visibilidade sobre o Modo Lançamento** com painel especial e relatório diário durante eventos
+
+**O que o corretor precisa ver/ter (secundário):**
+- Notificação WhatsApp quando lead atinge score threshold
+- Briefing estratégico da conversa antes de abordar o lead
+- Dossiê de Caviar quando visita é confirmada
+- Google Calendar atualizado automaticamente
+
+**Princípio de design do dashboard:**
+- Tier 1 (dono): pipeline em R$, KPIs de negócio, relatórios exportáveis, análise de objeções, histórico de relatórios semanais
+- Tier 2 (corretor): fila de leads quentes, histórico de conversa, status da visita
+- Nunca misturar os dois tiers na mesma view — o dono não quer ver transcrição de mensagem, quer ver número
+
+---
+
 ## FASE 3 — Serviço de luxo 🔵 PLANEJADA
 
 > Esta seção define as features de diferenciação premium que serão construídas após a FASE 2 estar estável em produção com ao menos 2 clientes reais. Não implementar antes disso.
@@ -688,19 +717,26 @@ curl -X POST http://76.13.165.64:8003/pipeline/start \
 - Para adicionar task: editar `backlog/tasks.json` com `id`, `title`, `description`, `acceptance_criteria`, `priority`, `context_files`.
 - `priority: "critical"` = score 10 no PO Agent — entra antes de qualquer task numérica.
 
-| id | título | prioridade |
-|----|--------|-----------|
-| `off-market-engine` | Motor de Pocket Listings e Matchmaking Sigiloso | critical |
-| `sellers-ai-dossier` | Dossiê de Captação e Posicionamento de Mercado | critical |
-| `permuta-triage` | Fluxo de Qualificação Complexa de Permutas | critical |
-| `liquidity-yield-dossier` | Expansão Hard Skills do Dossiê de Caviar | critical |
-| `human-takeover-concierge` | Transição Concierge — /assumir e /sofia | 8 |
-| `multi-corretor-routing` | Multi-corretor routing por bairro | 9 |
-| `followup-audio-vip` | Follow-up em áudio para leads VIP | 7 |
-| `dossie-de-caviar` | Dossiê de Caviar — PDF de briefing para o corretor | 7 |
-| `crm-webhook-inbound` | Webhook de entrada CRM → Sofia | 6 |
-| `test-coverage-improvement` | Aumentar cobertura de testes | 6 |
-| `dashboard-realtime` | Dashboard com atualizações em tempo real | 5 |
+| id | título | prioridade | ICP |
+|----|--------|-----------|-----|
+| `off-market-engine` | Motor de Pocket Listings e Matchmaking Sigiloso | critical | Dono |
+| `sellers-ai-dossier` | Dossiê de Captação e Posicionamento de Mercado | critical | Dono |
+| `permuta-triage` | Fluxo de Qualificação Complexa de Permutas | critical | Dono/Corretor |
+| `liquidity-yield-dossier` | Expansão Hard Skills do Dossiê de Caviar | critical | Dono |
+| `weekly-owner-report` | Relatório semanal automático para o dono (WhatsApp + Dashboard) | critical | **Dono** |
+| `portal-lead-capture` | Captura automática de leads de portais (ZAP, VivaReal, OLX) | 9 | **Dono** |
+| `pipeline-roi-calc` | Cálculo de pipeline em R$ e ROI estimado para o dono | 9 | **Dono** |
+| `multi-corretor-routing` | Multi-corretor routing por bairro | 9 | Corretor |
+| `human-takeover-concierge` | Transição Concierge — /assumir e /sofia | 8 | Corretor |
+| `launch-mode-sku` | Modo Lançamento — SKU separado (R$ 8–15k/evento) | 8 | **Dono** |
+| `google-calendar-integration` | Integração Google Calendar do corretor | 8 | Corretor |
+| `followup-audio-vip` | Follow-up em áudio para leads VIP | 7 | Lead |
+| `dossie-de-caviar` | Dossiê de Caviar — PDF de briefing para o corretor | 7 | Corretor |
+| `objection-analysis-report` | Análise de objeções recorrentes — inteligência de mercado | 7 | **Dono** |
+| `post-visit-satisfaction` | Pesquisa de satisfação pós-visita automática | 6 | **Dono** |
+| `crm-webhook-inbound` | Webhook de entrada CRM → Sofia | 6 | Dono/Corretor |
+| `test-coverage-improvement` | Aumentar cobertura de testes | 6 | Eng |
+| `dashboard-realtime` | Dashboard com atualizações em tempo real | 5 | Dono/Corretor |
 
 **Systemd:**
 - `imob-nightly.service` — oneshot, roda o squad
@@ -719,26 +755,4 @@ python3 /opt/ImobOne-v2/nightly_squad.py --dry-run
 python3 /opt/ImobOne-v2/nightly_squad.py --task-id multi-corretor-routing
 ```
 
-**Restrição arquitetural inegociável:** Deploy Agent nunca faz merge. Para no PR. Operador aprova pela manhã.
-
-### Bugs corrigidos no Nightly Squad — ✅ Abril 2026
-
-Identificados nos logs da primeira execução real (02:00 de 13/04/2026). Três problemas corrigidos:
-
-| Bug | Causa | Fix |
-|-----|-------|-----|
-| Notificação WhatsApp não chegou | `urllib.request` rejeita certificado self-signed da Evolution API com `SSL: CERTIFICATE_VERIFY_FAILED` | `_notify()` trocado para `httpx.Client(verify=False)` — mesmo padrão do `whatsapp_webhook.py` |
-| Dev Agent falhou 9/9 tentativas (`Não foi possível parsear JSON`) | LLM gerava código Python embrulhado em strings JSON — newlines, `\"`, regex com `\b` quebravam o parser | Formato de resposta trocado de JSON para tags XML `<file path="...">` e `<test path="...">` — imune a escaping de código |
-| QA Agent falhou com `FileNotFoundError: pytest` | `pytest` não estava instalado no venv `/opt/webhook-venv` | `pip install pytest` executado no venv; `VENV_PYTEST` já apontava para o caminho correto |
-
-**Instância WhatsApp `devlabz`:** desconectou durante a madrugada (`state: close`) — reconectada via QR code em 13/04/2026, `state: open` confirmado. Quando desconectar novamente: `curl -sk https://api.otaviolabs.com/instance/connect/devlabz -H 'apikey: ...'` retorna `base64` do QR para escanear.
-
-**Decisões técnicas registradas (não reabrir):**
-- `_notify()` usa `httpx` com `verify=False` — Evolution API usa cert self-signed. Não reverter para `urllib.request`.
-- Dev Agent usa formato XML `<file>/<test>` — não JSON. JSON com código Python embrulhado em strings é inerentemente frágil.
-- `pytest` é dependência obrigatória do venv. Incluir em qualquer nova instalação de venv.
-
----
-
-*Última atualização: Abril 2026 — Nightly Squad executou pela primeira vez em produção (02:00 de 13/04). Três bugs corrigidos: SSL notify, Dev Agent XML format, pytest instalado. Instância WhatsApp `devlabz` reconectada (`state: open`) e notificação de teste confirmada entregue. Pipeline Runner autônomo ativo (porta 8003). Fase 3 mapeada com 4 features. CRM completo com 6 adapters e 66 testes. Demo ao vivo com Sofia. GitHub token configurado e validado — Deploy Agent ativo. Timer `imob-nightly.timer` ativo, próximo disparo 02:00. Backlog: 11 tasks — 4 `critical` (off-market-engine, sellers-ai-dossier, permuta-triage, liquidity-yield-dossier). Pendente: 360dialog para primeiro cliente real (prospect: maior house de SP, usa C2S CRM).*
-*Este documento é a fonte da verdade do projeto. Qualquer decisão que conflite com ele deve passar pelo arquiteto auditor antes de ser implementada.*
+**R

@@ -1,0 +1,232 @@
+{
+  "version": "1.2",
+  "updated_at": "2026-04-13",
+  "tasks": [
+    {
+      "id": "multi-corretor-routing",
+      "title": "Multi-corretor routing por bairro",
+      "description": "Hoje CORRETOR_NUMBER é um env var único. O onboarding.json já tem a tabela 'corretores' com bairro/especialidade, mas o webhook ignora esse campo e notifica sempre o mesmo número. Implementar roteamento: quando Sofia detecta score >= threshold, buscar o corretor responsável pelo bairro do imóvel de interesse e notificar o número correto.",
+      "acceptance_criteria": [
+        "Webhook lê onboarding['corretores'] e faz match por bairro/especialidade do imóvel",
+        "Se não houver match, usa CORRETOR_NUMBER como fallback",
+        "Testes unitários cobrindo: match exato, fallback, múltiplos corretores"
+      ],
+      "context_files": [
+        "whatsapp_webhook.py",
+        "clients/demo_imobiliaria_vendas/onboarding.json"
+      ],
+      "priority": 9,
+      "status": "pending",
+      "depends_on": [],
+      "blocks": ["lead-routing-crm"]
+    },
+    {
+      "id": "followup-audio-vip",
+      "title": "Follow-up em áudio para leads VIP (Fase 3 Feature 2)",
+      "description": "O followup_engine.py envia apenas texto. Para leads com score >= 8 e silêncio > 48h, gerar mensagem de voz personalizada via ElevenLabs (nome do lead + imóvel específico) e enviar como PTT. Novo cenário 8 no followup_engine.",
+      "acceptance_criteria": [
+        "Novo cenário 8 em followup_engine.py detecta leads VIP silenciosos",
+        "Gera áudio via ElevenLabs com nome do lead e referência ao imóvel",
+        "Envia como PTT via Evolution API",
+        "Idempotência: tabela followup_events garante que não repete",
+        "Testes para geração e envio de áudio"
+      ],
+      "context_files": [
+        "followup_engine.py",
+        "tools/tts.py",
+        "tools/whatsapp.py"
+      ],
+      "priority": 7,
+      "status": "pending",
+      "depends_on": [],
+      "blocks": []
+    },
+    {
+      "id": "crm-webhook-inbound",
+      "title": "Webhook de entrada CRM → Sofia",
+      "description": "Endpoint no webhook para receber eventos do CRM (novo lead criado no CRM, status atualizado). Base para o cenário 6 (reativação CRM) do followup_engine. O CRM faz POST para /crm-event com {provider, event_type, lead_data}.",
+      "acceptance_criteria": [
+        "Endpoint POST /crm-event no whatsapp_webhook.py",
+        "Aceita payload normalizado via CRMRouter",
+        "Cria lead no Supabase se não existir",
+        "Dispara mensagem inicial da Sofia para o número do lead",
+        "Testes de integração para cada event_type"
+      ],
+      "context_files": [
+        "whatsapp_webhook.py",
+        "tools/crm_webhook.py",
+        "tools/crm/router.py"
+      ],
+      "priority": 6,
+      "status": "pending",
+      "depends_on": [],
+      "blocks": ["followup-crm-reativacao"]
+    },
+    {
+      "id": "dashboard-realtime",
+      "title": "Dashboard com atualizações em tempo real (WebSocket)",
+      "description": "O dashboard.html atual faz polling no Supabase a cada 30s. Implementar WebSocket via FastAPI para push de eventos em tempo real: novo lead, score atualizado, visita confirmada, corretor notificado.",
+      "acceptance_criteria": [
+        "WebSocket endpoint /ws no pipeline_runner.py ou novo server",
+        "Dashboard.html se conecta ao WebSocket e atualiza sem reload",
+        "Eventos: new_lead, score_update, visit_confirmed, agent_notified",
+        "Fallback para polling se WebSocket cair"
+      ],
+      "context_files": [
+        "dashboard.html",
+        "pipeline_runner.py"
+      ],
+      "priority": 5,
+      "status": "pending",
+      "depends_on": [],
+      "blocks": []
+    },
+    {
+      "id": "human-takeover-concierge",
+      "title": "Transição Concierge — /assumir e /sofia (Fase 3 Feature 4)",
+      "description": "Corretor envia /assumir 5511999990001 no WhatsApp → Sofia para de responder para aquele lead. Sofia envia mensagem de transição neutra. /sofia 5511999990001 devolve o controle. Requer nova migration leads.human_takeover.",
+      "acceptance_criteria": [
+        "Webhook detecta /assumir e /sofia nas mensagens do corretor",
+        "Flag human_takeover no Redis + Supabase por sender",
+        "Sofia não responde quando human_takeover = true",
+        "Migration add_human_takeover aplicada no Supabase",
+        "Testes para takeover, passagem de contexto e reversão"
+      ],
+      "context_files": [
+        "whatsapp_webhook.py",
+        "tools/whatsapp.py"
+      ],
+      "priority": 8,
+      "status": "pending",
+      "depends_on": [],
+      "blocks": []
+    },
+    {
+      "id": "dossie-de-caviar",
+      "title": "Dossiê de Caviar — PDF de briefing para o corretor (Fase 3 Feature 3)",
+      "description": "Quando Sofia confirma visita, gerar PDF com perfil psicológico do lead, hot buttons, objeções, budget declarado. Enviar ao corretor via WhatsApp. Usar Claude Sonnet para síntese + reportlab para PDF.",
+      "acceptance_criteria": [
+        "Trigger: visita_agendada = true detectado no webhook",
+        "Claude Sonnet analisa histórico completo e gera dossier estruturado",
+        "PDF gerado via reportlab com layout limpo",
+        "PDF enviado ao corretor via Evolution API como documento",
+        "Testes para geração de PDF e envio"
+      ],
+      "context_files": [
+        "whatsapp_webhook.py",
+        "followup_engine.py"
+      ],
+      "priority": 7,
+      "status": "pending",
+      "depends_on": ["human-takeover-concierge"],
+      "blocks": []
+    },
+    {
+      "id": "test-coverage-improvement",
+      "title": "Aumentar cobertura de testes — webhook e followup engine",
+      "description": "whatsapp_webhook.py e followup_engine.py têm cobertura de testes baixa. Escrever testes unitários para os principais flows: recepção de mensagem, cálculo de score, detecção de descarte, detecção de visita confirmada, cenários do followup.",
+      "acceptance_criteria": [
+        "Cobertura de testes > 60% para whatsapp_webhook.py",
+        "Cobertura de testes > 70% para followup_engine.py",
+        "Todos os novos testes passando no CI",
+        "Mock correto para Evolution API e Supabase"
+      ],
+      "context_files": [
+        "whatsapp_webhook.py",
+        "followup_engine.py",
+        "tests/"
+      ],
+      "priority": 6,
+      "status": "pending",
+      "depends_on": [],
+      "blocks": []
+    },
+    {
+      "id": "off-market-engine",
+      "title": "Motor de Pocket Listings e Matchmaking Sigiloso",
+      "description": "Criar fluxo de ingestão via áudio no WhatsApp exclusivo para corretores. O sistema deve transcrever o áudio, extrair características do imóvel off-market, salvar no Supabase pgvector em um namespace is_off_market=true (invisível para buscas públicas) e acionar o followup_engine.py para cruzar passivamente com a base de leads VIP.",
+      "acceptance_criteria": [
+        "Webhook detecta mensagem de áudio originada de número cadastrado em onboarding['corretores'] e processa como ingestão off-market",
+        "Whisper transcreve o áudio e Claude Haiku extrai JSON estruturado do imóvel (tipologia, metragem, bairro, valor, características)",
+        "Imóvel salvo no Supabase pgvector com flag is_off_market=true e client_id correto — não aparece em buscas públicas de leads",
+        "followup_engine.py executa match semântico entre o novo imóvel e leads VIP (score >= 6) e gera draft de abordagem personalizado",
+        "Draft enviado ao corretor via WhatsApp com nome do lead, imóvel matchado e sugestão de abertura",
+        "Testes unitários: detecção de áudio de corretor, extração de JSON, flag de invisibilidade, match semântico com leads mock"
+      ],
+      "context_files": [
+        "whatsapp_webhook.py",
+        "agents/ingestion.py",
+        "followup_engine.py",
+        "state/schema.py"
+      ],
+      "priority": "critical",
+      "status": "pending",
+      "depends_on": [],
+      "blocks": ["sellers-ai-dossier"]
+    },
+    {
+      "id": "sellers-ai-dossier",
+      "title": "Dossiê de Captação e Posicionamento de Mercado",
+      "description": "Construir módulo para proprietários. Quando acionado, o sistema busca dados reais da vizinhança (Places API) e cruza com a média de preço/m² de imóveis similares no pgvector, gerando um dossiê em Markdown/PDF focado em 'como vender este imóvel'.",
+      "acceptance_criteria": [
+        "Nova tool gerar_dossie_captacao(lat, lng, tipologia) implementada em tools/ com assinatura tipada e docstring",
+        "Tool consulta Places API retornando >= 3 POIs de luxo no raio de 1km e não lança exceção se API key ausente (fallback gracioso)",
+        "Tool consulta pgvector com query de similaridade por tipologia+bairro e retorna >= 1 imóvel comparável ou loga warning se base vazia",
+        "Output serializado como Markdown estruturado com seções: Resumo do Imóvel, Comparativos de Mercado, Vizinhança Premium, Estratégia de Precificação",
+        "PDF ou HTML gerado via reportlab ou jinja2 salvo em clients/{client_id}/assets/ e link enviado ao corretor via Evolution API",
+        "Testes unitários para a tool com mocks de Places API e pgvector cobrindo: sucesso, fallback sem API key, base pgvector vazia"
+      ],
+      "context_files": [
+        "tools/places_api.py",
+        "agents/dev_flow.py",
+        "tools/embeddings.py"
+      ],
+      "priority": "critical",
+      "status": "pending",
+      "depends_on": ["off-market-engine"],
+      "blocks": []
+    },
+    {
+      "id": "permuta-triage",
+      "title": "Fluxo de Qualificação Complexa de Permutas",
+      "description": "Atualizar o grafo LangGraph e o prompt do consultor base para identificar proativamente cenários de permuta em leads de alto padrão. Extrair dados do ativo oferecido, avaliar peso financeiro conforme rules.md do cliente e adicionar no score_breakdown.",
+      "acceptance_criteria": [
+        "consultant_base.md atualizado com instrução explícita para questionar estrutura de liquidez quando lead menciona troca, permuta ou tem outro imóvel",
+        "Regex ou extração via Claude Haiku identifica menção a permuta na mensagem do lead e seta flag permuta_detectada=true no Redis por sender",
+        "Quando permuta_detectada=true, webhook extrai dados do ativo (tipo, localização, valor estimado) e salva em leads.permuta_dados (novo campo Supabase)",
+        "score_breakdown acrescenta categoria permuta com peso configurável no onboarding.json (padrão: +3 pts se ativo de alto padrão declarado)",
+        "Briefing enviado ao corretor contém seção 'Análise de Permuta' com dados extraídos e peso financeiro estimado quando permuta_detectada=true",
+        "Testes: detecção de regex de permuta (5 variações linguísticas), extração de dados, cálculo de score com e sem permuta"
+      ],
+      "context_files": [
+        "prompts/base/consultant_base.md",
+        "agents/dev_flow.py",
+        "whatsapp_webhook.py"
+      ],
+      "priority": "critical",
+      "status": "pending",
+      "depends_on": [],
+      "blocks": ["liquidity-yield-dossier"]
+    },
+    {
+      "id": "liquidity-yield-dossier",
+      "title": "Expansão Hard Skills do Dossiê de Caviar — Métricas Financeiras",
+      "description": "Injetar dados quantitativos no Dossiê de Caviar. Integrar lógica para buscar histórico de valorização de CEP/região e liquidez estimada para leads perfil investidor. Nunca gera dados financeiros inventados — só exibe seção se dados verificáveis estiverem disponíveis.",
+      "acceptance_criteria": [
+        "Tool buscar_dados_liquidez(cep, tipologia) implementada — retorna dados reais de fonte configurável (mock estruturado em tests/) ou integração com API de dados imobiliários",
+        "Prompt do Claude Sonnet para geração do dossiê inclui instrução: incluir seção 'Métricas Financeiras' SOMENTE quando perfil == investidor E dados de liquidez estiverem disponíveis na tool",
+        "Prompt proíbe explicitamente geração de rentabilidade, yield ou cap rate sem fonte verificável — critério testável pelo QA Agent via assertion no output",
+        "Seção 'Métricas Financeiras' contém: valorização histórica do CEP (% ao ano, fonte), liquidez estimada (dias médios para venda), comparativo de rentabilidade vs. FII de referência",
+        "Quando dados não disponíveis, seção é omitida e substituída por texto padrão sem invenção",
+        "Testes: geração com perfil investidor + dados disponíveis, geração com perfil comprador (sem seção), geração com perfil investidor + dados ausentes (sem seção, sem invenção)"
+      ],
+      "context_files": [
+        "tools/crm_webhook.py",
+        "agents/qa_journeys.py"
+      ],
+      "priority": "critical",
+      "status": "pending",
+      "depends_on": ["dossie-de-caviar", "permuta-triage"],
+      "blocks": []
+    },
+    {
