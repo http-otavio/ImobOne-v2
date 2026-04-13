@@ -103,6 +103,50 @@ def _ctx_corretor_email() -> str:
     return _client_ctx.get().get("corretor_email", os.getenv("CORRETOR_EMAIL", ""))
 
 
+def _resolve_corretor_email_for_lead(imovel_id: str) -> str:
+    """
+    Retorna o e-mail do corretor responsável pelo bairro do imóvel.
+
+    Lógica:
+    1. Busca o imóvel no portfólio → obtém bairro.
+    2. Percorre `corretores` do onboarding buscando correspondência de bairro
+       (case-insensitive, partial match).
+    3. Retorna o `corretor_email` do corretor responsável.
+    4. Fallback: `_ctx_corretor_email()` (env var ou campo único no registry).
+    """
+    try:
+        portfolio = _load_portfolio_dict()
+        imovel = portfolio.get(imovel_id, {})
+        imovel_bairro = (imovel.get("bairro", "") or "").lower().strip()
+
+        if imovel_bairro:
+            client_id = _ctx_client_id()
+            try:
+                from setup_pipeline import carregar_onboarding
+                onboarding = carregar_onboarding(client_id)
+                corretores = onboarding.get("corretores", [])
+                for corretor in corretores:
+                    bairros = [b.lower().strip() for b in corretor.get("bairros_regioes", [])]
+                    # Partial match bilateral: "jardins" bate "Jardins Paulista" e vice-versa
+                    if any(imovel_bairro in b or b in imovel_bairro for b in bairros):
+                        email = corretor.get("corretor_email", "")
+                        if email:
+                            log.debug(
+                                "calendar: roteado para %s → %s (bairro: %s)",
+                                corretor.get("nome", "?"), email, imovel_bairro,
+                            )
+                            return email
+            except Exception as e:
+                log.debug("calendar: erro ao resolver corretor por bairro: %s", e)
+
+    except Exception as e:
+        log.debug("calendar: _resolve_corretor_email_for_lead falhou: %s", e)
+
+    # Fallback: corretor padrão do cliente (env var ou clients_registry.json)
+    return _ctx_corretor_email()
+
+
+
 def _ctx_voice_id() -> str:
     return _client_ctx.get().get("elevenlabs_voice_id", ELEVENLABS_VOICE_ID)
 
@@ -1588,11 +1632,6 @@ async def _create_calendar_event_for_visit(
         log.warning("calendar: tools/calendar.py não disponível")
         return
 
-    corretor_email = _ctx_corretor_email()
-    if not corretor_email:
-        log.debug("calendar: corretor_email não configurado — pulando criação de evento")
-        return
-
     try:
         # Dados do lead
         lead_data = _memory_leads.get(sender, {}) if hasattr(sys.modules[__name__], "_memory_leads") else {}
@@ -1623,6 +1662,12 @@ async def _create_calendar_event_for_visit(
 
         imovel = portfolio.get(imovel_id, {})
         imovel_descricao = format_imovel_descricao(imovel) if imovel else imovel_id
+
+        # Resolve o corretor responsável pelo bairro do imóvel (agora que imovel_id está definido)
+        corretor_email = _resolve_corretor_email_for_lead(imovel_id)
+        if not corretor_email:
+            log.debug("calendar: corretor_email não configurado — pulando criação de evento")
+            return
 
         # Parseia data/hora da visita
         visit_dt = _parse_visit_datetime_from_reply(reply) if reply else None
