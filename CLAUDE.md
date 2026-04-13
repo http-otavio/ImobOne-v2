@@ -731,7 +731,7 @@ Identificados nos logs da primeira execução real (02:00 de 13/04/2026). Três 
 | Dev Agent falhou 9/9 tentativas (`Não foi possível parsear JSON`) | LLM gerava código Python embrulhado em strings JSON — newlines, `\"`, regex com `\b` quebravam o parser | Formato de resposta trocado de JSON para tags XML `<file path="...">` e `<test path="...">` — imune a escaping de código |
 | QA Agent falhou com `FileNotFoundError: pytest` | `pytest` não estava instalado no venv `/opt/webhook-venv` | `pip install pytest` executado no venv; `VENV_PYTEST` já apontava para o caminho correto |
 
-**Instância WhatsApp `devlabz`:** desconectou durante a madrugada (`state: close`). Reconectar via QR code quando necessário: `curl -sk https://api.otaviolabs.com/instance/connect/devlabz -H 'apikey: ...'` retorna `base64` do QR.
+**Instância WhatsApp `devlabz`:** desconectou durante a madrugada (`state: close`) — reconectada via QR code em 13/04/2026, `state: open` confirmado. Quando desconectar novamente: `curl -sk https://api.otaviolabs.com/instance/connect/devlabz -H 'apikey: ...'` retorna `base64` do QR para escanear.
 
 **Decisões técnicas registradas (não reabrir):**
 - `_notify()` usa `httpx` com `verify=False` — Evolution API usa cert self-signed. Não reverter para `urllib.request`.
@@ -740,5 +740,5 @@ Identificados nos logs da primeira execução real (02:00 de 13/04/2026). Três 
 
 ---
 
-*Última atualização: Abril 2026 — Nightly Squad executou pela primeira vez em produção (02:00 de 13/04). Três bugs corrigidos: SSL notify, Dev Agent XML format, pytest instalado. Pipeline Runner autônomo ativo (porta 8003). Fase 3 mapeada com 4 features. CRM completo com 6 adapters e 66 testes. Demo ao vivo com Sofia. GitHub token configurado e validado — Deploy Agent ativo. Timer `imob-nightly.timer` ativo, próximo disparo 02:00. Backlog: 11 tasks — 4 `critical` (off-market-engine, sellers-ai-dossier, permuta-triage, liquidity-yield-dossier). Pendente: 360dialog para primeiro cliente real (prospect: maior house de SP, usa C2S CRM).*
+*Última atualização: Abril 2026 — Nightly Squad executou pela primeira vez em produção (02:00 de 13/04). Três bugs corrigidos: SSL notify, Dev Agent XML format, pytest instalado. Instância WhatsApp `devlabz` reconectada (`state: open`) e notificação de teste confirmada entregue. Pipeline Runner autônomo ativo (porta 8003). Fase 3 mapeada com 4 features. CRM completo com 6 adapters e 66 testes. Demo ao vivo com Sofia. GitHub token configurado e validado — Deploy Agent ativo. Timer `imob-nightly.timer` ativo, próximo disparo 02:00. Backlog: 11 tasks — 4 `critical` (off-market-engine, sellers-ai-dossier, permuta-triage, liquidity-yield-dossier). Pendente: 360dialog para primeiro cliente real (prospect: maior house de SP, usa C2S CRM).*
 *Este documento é a fonte da verdade do projeto. Qualquer decisão que conflite com ele deve passar pelo arquiteto auditor antes de ser implementada.*
