@@ -418,4 +418,97 @@ def _get_report_engine():
     """Importa report_engine lazily para não quebrar se não estiver instalado."""
     try:
         if str(BASE_DIR) not in sys.path:
-    
+            sys.path.insert(0, str(BASE_DIR))
+        import report_engine as re_mod
+        return re_mod
+    except ImportError as e:
+        log.warning("report_engine não disponível: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Endpoints de relatório
+# ---------------------------------------------------------------------------
+
+@app.get("/reports/weekly")
+async def run_weekly_report(client_id: str = "demo_imobiliaria_vendas"):
+    """Gera e envia o relatório semanal executivo para o operador."""
+    re_mod = _get_report_engine()
+    if not re_mod:
+        raise HTTPException(status_code=503, detail="report_engine não disponível")
+    try:
+        metrics = await re_mod.run_weekly_report(client_id=client_id)
+        return {"status": "ok", "metrics": metrics}
+    except Exception as e:
+        log.error("Erro ao gerar relatório semanal: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/reports/history")
+async def list_report_history(client_id: str = "demo_imobiliaria_vendas", limit: int = 10):
+    """Lista os relatórios semanais salvos em disco."""
+    re_mod = _get_report_engine()
+    if not re_mod:
+        raise HTTPException(status_code=503, detail="report_engine não disponível")
+    try:
+        history = re_mod.load_report_history(client_id=client_id, limit=limit)
+        return {"status": "ok", "reports": history}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/reports/export/csv")
+async def export_report_csv(client_id: str = "demo_imobiliaria_vendas"):
+    """Exporta o relatório mais recente como CSV."""
+    re_mod = _get_report_engine()
+    if not re_mod:
+        raise HTTPException(status_code=503, detail="report_engine não disponível")
+    try:
+        history = re_mod.load_report_history(client_id=client_id, limit=1)
+        if not history:
+            raise HTTPException(status_code=404, detail="Nenhum relatório disponível")
+        csv_bytes = re_mod.export_csv(history[0])
+        from fastapi.responses import Response
+        return Response(
+            content=csv_bytes,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=relatorio_{client_id}.csv"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/reports/export/pdf")
+async def export_report_pdf(client_id: str = "demo_imobiliaria_vendas"):
+    """Exporta o relatório mais recente como PDF."""
+    re_mod = _get_report_engine()
+    if not re_mod:
+        raise HTTPException(status_code=503, detail="report_engine não disponível")
+    try:
+        history = re_mod.load_report_history(client_id=client_id, limit=1)
+        if not history:
+            raise HTTPException(status_code=404, detail="Nenhum relatório disponível")
+        pdf_bytes = re_mod.export_pdf(history[0])
+        from fastapi.responses import Response
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=relatorio_{client_id}.pdf"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("RUNNER_PORT", "8003"))
+    log.info("Pipeline Runner iniciando na porta %d", port)
+    uvicorn.run(app, host="0.0.0.0", port=port)
