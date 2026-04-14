@@ -926,17 +926,20 @@ Sem essas variáveis, sistema opera normalmente — hook silenciosamente ignorad
 | `rls_leads_and_conversas` | RLS em `leads` (dono vê tudo do client_id, corretor vê leads atribuídos); RLS em `conversas` (mesma lógica via JOIN lead_phone) |
 | `anomaly_detection_trigger` | Função `detect_anomaly_on_audit_read()` + trigger `trg_anomaly_on_audit_read`; view `v_pending_anomaly_alerts`; índice em `anomaly_alerts(user_id, alert_type)` WHERE resolved_at IS NULL |
 
-**Para ativar em produção:**
+**Infraestrutura de deploy:**
+- Serviço `imob_admin` no Docker Swarm stack `imob` (não systemd)
+- Imagem: `imovel-ai-agents:latest` com uvicorn na porta 8004
+- Redes: `imob_net` (Redis interno) + `OtavioNet` (Traefik discovery)
+- Domínio: `https://app.imobone.com.br` — cert Let's Encrypt automático via Traefik
+- Porta 8004 bloqueada externamente via iptables — acesso apenas via Traefik/HTTPS
+- **Importante (Traefik v3 Swarm):** middleware ref deve ser `@swarm`, nunca `@docker`
+
+**Deploy padrão:**
 ```bash
-# 1. Obter service_role key: Supabase Dashboard → Settings → API → service_role secret
-# 2. Adicionar ao env:
-echo "SUPABASE_SERVICE_KEY=eyJ..." >> /opt/webhook.env
-echo "ADMIN_PORT=8004" >> /opt/webhook.env
-# 3. Iniciar serviço:
-systemctl enable --now imob-admin.service
-# 4. Verificar:
-systemctl status imob-admin.service
-curl http://localhost:8004/health
+cd /opt/ImobOne-v2
+docker build -t imovel-ai-agents:latest .
+docker stack deploy -c docker-compose.yml imob
+# SUPABASE_SERVICE_KEY deve estar em /opt/webhook.env
 ```
 
 **Próximos passos do painel (não implementados):**
@@ -950,7 +953,7 @@ curl http://localhost:8004/health
 - JWT pass-through, não replicação de RLS em Python — única fonte de verdade é o banco
 - Active response (revogar sessão) é obrigatório — log sem ação é autópsia depois do fato
 - `SUPABASE_SERVICE_KEY` ≠ `SUPABASE_KEY` (anon) — admin_api.py valida isso no startup e recusa iniciar com chave anon
-- Domínio fixo `app.imoboneai.com.br` — sem subdomínios por cliente (complexidade desnecessária de TLS/CORS/cookies)
+- Domínio fixo `app.imobone.com.br` — sem subdomínios por cliente (complexidade desnecessária de TLS/CORS/cookies)
 - `takeover_audit` é append-only por design — `UPDATE` e `DELETE` bloqueados via RLS absolutamente
 
 ---
@@ -958,4 +961,5 @@ curl http://localhost:8004/health
 *Última atualização: Abril 2026 — google-calendar-integration deployado: tools/calendar.py (create_calendar_event via service account), _create_calendar_event_for_visit() fire-and-forget no webhook, corretor_email no onboarding, 20 testes. pipeline-roi-calc: migration Supabase (pipeline_value_brl), 15 testes. 121 testes totais passando (20 calendar + 15 pipeline + 50 portal + 36 report). portal_lead_capture.py deployado. Report Engine semanal (timer domingo 21h BRT). Nightly Squad executou 02:00 de 13/04 — 3 bugs corrigidos. WhatsApp devlabz state: open. Pipeline Runner ativo (porta 8003). Fase 3 mapeada. CRM 6 adapters. Ativar calendar: GOOGLE_CALENDAR_CREDENTIALS_JSON no webhook.env + corretor_email por corretor no onboarding.json (multi-corretor routing automático por bairro). Pendente: 360dialog para primeiro cliente real.*
 *Última atualização: Abril 2026 — objection-analysis-report: objection_engine.py (Haiku primário, regex apenas para casos inequívocos — 7 categorias), /reports/objections endpoint no pipeline runner (period=week|month), top-3 objeções no WhatsApp semanal, migration add_objections_detected.sql, 45 testes. 171 testes totais (45 objection + 20 calendar + 15 pipeline + 50 portal + 36 report). Wiring no webhook: detect_and_save_objection fire-and-forget após score de intenção. google-calendar-integration: multi-corretor routing por bairro (_resolve_corretor_email_for_lead). Nightly Squad ativo (02:00 BRT). Pipeline Runner (porta 8003). Pendente: 360dialog para primeiro cliente real.*
 *Última atualização: Abril 2026 — Painel Administrativo (backend): admin_api.py (FastAPI porta 8004), JWT pass-through completo, audit middleware, anomaly detection com resposta ativa (revocação de sessão + WhatsApp), human takeover integrado com webhook. Migrations 3+4+5: human_takeover em leads, takeover_audit (append-only), RLS em leads/conversas, trigger de anomalia. whatsapp_webhook.py: _is_human_takeover_active() (Redis + Supabase fallback), _assign_corretor_to_lead() ao notificar. systemd: imob-admin.service. PENDENTE para ativar: SUPABASE_SERVICE_KEY no webhook.env (Supabase Dashboard → Settings → API → service_role secret). Próximos: Cloudflare WAF, Nginx headers, Next.js frontend do painel.*
+*Última atualização: Abril 2026 — Infra admin panel completa: app.imobone.com.br ativo com HTTPS + cert Let's Encrypt automático via Traefik. Docker service imob_admin no Swarm (OtavioNet). Security headers: HSTS, X-Frame-Options, X-Content-Type, XSS, Referrer via middleware Traefik. Porta 8004 bloqueada externamente via iptables. Fix Traefik v3: middleware ref @swarm não @docker. SUPABASE_SERVICE_KEY configurada. imob-admin.service (systemd) desativado — substituído pelo Docker service. Próximo: Next.js frontend do painel (app.imobone.com.br).*
 *Este documento é a fonte da verdade do projeto. Qualquer decisão que conflite com ele deve passar pelo arquiteto auditor antes de ser implementada.*
