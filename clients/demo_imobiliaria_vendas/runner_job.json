@@ -1,0 +1,9 @@
+{
+  "client_id": "demo_imobiliaria_vendas",
+  "status": "human_review",
+  "skip_agents": [],
+  "updated_at": "2026-04-12T23:13:24.311582+00:00",
+  "started_at": "2026-04-12T23:13:24.060851+00:00",
+  "exit_code": 1,
+  "elapsed_seconds": 0.2
+}

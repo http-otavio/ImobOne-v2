@@ -1,0 +1,18 @@
+{
+  "client_id": "demo_imobiliaria_vendas",
+  "period_days": 7,
+  "period_start": "2026-04-06T13:51:13.862155+00:00",
+  "period_end": "2026-04-13T13:51:13.862155+00:00",
+  "generated_at": "2026-04-13T13:51:13.862155+00:00",
+  "total_leads": 0,
+  "visitas_confirmadas": 0,
+  "leads_quentes": 0,
+  "leads_descartados": 0,
+  "pipeline_estimado_brl": 0.0,
+  "taxa_conversao_pct": 0.0,
+  "score_medio": 0.0,
+  "top_objecao": null,
+  "top_objecao_count": 0,
+  "objection_breakdown": {},
+  "leads_por_origem": {}
+}

@@ -2,7 +2,16 @@
 #
 # Deploy via Docker Swarm (sem docker-compose instalado no VPS):
 #
+#   # Passo 1: build da imagem Python (agents + admin_api)
 #   docker build -t imovel-ai-agents:latest .
+#
+#   # Passo 2: build da imagem Next.js (painel admin frontend)
+#   docker build -t imovel-ai-nextjs:latest \
+#     --build-arg NEXT_PUBLIC_SUPABASE_URL=... \
+#     --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=... \
+#     ./frontend
+#
+#   # Passo 3: deploy do stack
 #   docker stack deploy -c docker-compose.yml imob
 #
 # Remover stack:
@@ -10,8 +19,15 @@
 #
 # Logs em tempo real:
 #   docker service logs -f imob_agents
-#   docker service logs -f imob_dashboard
+#   docker service logs -f imob_admin
+#   docker service logs -f imob_nextjs
 #   docker service logs -f imob_redis
+#
+# Roteamento Traefik L7 (app.imobone.com.br):
+#   → PathPrefix(/api/webhooks)    : imob_admin (FastAPI, priority=10)
+#                                    — para webhook inbound de portais e futuros BSPs
+#   → tudo o mais                  : imob_nextjs (Next.js, priority=1)
+#   — admin_api:8004 só é acessível via rede interna imob_net; Next.js é o único proxy público
 #
 # Redis próprio do stack — não depende de OtavioNet nem do Redis do n8n.
 # Dentro da rede imob_net, o Redis resolve pelo nome de serviço: redis://redis:6379
@@ -190,25 +206,18 @@ services:
           cpus: "0.1"
           memory: 128M
       labels:
-        # Traefik — rota pública app.imobone.com.br → porta 8004
+        # Traefik — admin_api agora só responde ao PathPrefix /api/webhooks (priority=10)
+        # Tudo o mais vai para o Next.js (priority=1). admin_api:8004 nunca é exposto
+        # diretamente — Next.js chama via rede interna Docker (http://admin_api:8004).
         - "traefik.enable=true"
         - "traefik.docker.network=OtavioNet"
-        - "traefik.http.routers.imob-admin.rule=Host(`app.imobone.com.br`)"
-        - "traefik.http.routers.imob-admin.entrypoints=websecure"
-        - "traefik.http.routers.imob-admin.tls.certresolver=letsencryptresolver"
-        - "traefik.http.routers.imob-admin.service=imob-admin"
-        - "traefik.http.services.imob-admin.loadbalancer.server.port=8004"
-        - "traefik.http.services.imob-admin.loadbalancer.passHostHeader=true"
-        # Middlewares de segurança — sem sufixo @provider (mesmo provider que o router)
-        - "traefik.http.routers.imob-admin.middlewares=imob-admin-security@swarm"
-        - "traefik.http.middlewares.imob-admin-security.headers.stsSeconds=31536000"
-        - "traefik.http.middlewares.imob-admin-security.headers.stsIncludeSubdomains=true"
-        - "traefik.http.middlewares.imob-admin-security.headers.stsPreload=true"
-        - "traefik.http.middlewares.imob-admin-security.headers.forceSTSHeader=true"
-        - "traefik.http.middlewares.imob-admin-security.headers.frameDeny=true"
-        - "traefik.http.middlewares.imob-admin-security.headers.contentTypeNosniff=true"
-        - "traefik.http.middlewares.imob-admin-security.headers.browserXssFilter=true"
-        - "traefik.http.middlewares.imob-admin-security.headers.referrerPolicy=strict-origin-when-cross-origin"
+        - "traefik.http.routers.imob-webhooks.rule=Host(`app.imobone.com.br`) && PathPrefix(`/api/webhooks`)"
+        - "traefik.http.routers.imob-webhooks.entrypoints=websecure"
+        - "traefik.http.routers.imob-webhooks.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.imob-webhooks.service=imob-admin-svc"
+        - "traefik.http.routers.imob-webhooks.priority=10"
+        - "traefik.http.services.imob-admin-svc.loadbalancer.server.port=8004"
+        - "traefik.http.services.imob-admin-svc.loadbalancer.passHostHeader=true"
     healthcheck:
       test: ["CMD", "python", "-c",
              "import httpx, sys; r = httpx.get('http://localhost:8004/health', timeout=5); sys.exit(0 if r.status_code == 200 else 1)"]
@@ -216,6 +225,69 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ─── Next.js — Painel Administrativo Frontend ───────────────────────────────
+  # Rota padrão de app.imobone.com.br (priority=1, pega tudo que não é /api/webhooks).
+  # Chama admin_api:8004 via rede interna imob_net — nunca através do Traefik.
+  # SESSION_SECRET: gerar com `openssl rand -base64 32` e adicionar ao webhook.env.
+  nextjs:
+    image: imovel-ai-nextjs:latest
+    env_file:
+      - /opt/webhook.env
+    environment:
+      - NODE_ENV=production
+      - ADMIN_API_URL=http://admin_api:8004
+      # SESSION_SECRET e NEXT_PUBLIC_SUPABASE_* vêm do webhook.env
+    networks:
+      - imob_net      # acesso interno ao admin_api:8004
+      - OtavioNet     # Traefik discovery
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        window: 60s
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+      labels:
+        # Rota padrão — todo o tráfego de app.imobone.com.br que não for /api/webhooks
+        - "traefik.enable=true"
+        - "traefik.docker.network=OtavioNet"
+        - "traefik.http.routers.imob-nextjs.rule=Host(`app.imobone.com.br`)"
+        - "traefik.http.routers.imob-nextjs.entrypoints=websecure"
+        - "traefik.http.routers.imob-nextjs.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.imob-nextjs.service=imob-nextjs-svc"
+        - "traefik.http.routers.imob-nextjs.priority=1"
+        - "traefik.http.services.imob-nextjs-svc.loadbalancer.server.port=3000"
+        - "traefik.http.services.imob-nextjs-svc.loadbalancer.passHostHeader=true"
+        # Security headers (Traefik v3 Swarm — @swarm obrigatório)
+        - "traefik.http.routers.imob-nextjs.middlewares=imob-nextjs-security@swarm"
+        - "traefik.http.middlewares.imob-nextjs-security.headers.stsSeconds=31536000"
+        - "traefik.http.middlewares.imob-nextjs-security.headers.stsIncludeSubdomains=true"
+        - "traefik.http.middlewares.imob-nextjs-security.headers.stsPreload=true"
+        - "traefik.http.middlewares.imob-nextjs-security.headers.forceSTSHeader=true"
+        - "traefik.http.middlewares.imob-nextjs-security.headers.frameDeny=true"
+        - "traefik.http.middlewares.imob-nextjs-security.headers.contentTypeNosniff=true"
+        - "traefik.http.middlewares.imob-nextjs-security.headers.browserXssFilter=true"
+        - "traefik.http.middlewares.imob-nextjs-security.headers.referrerPolicy=strict-origin-when-cross-origin"
+    healthcheck:
+      test: ["CMD", "node", "-e",
+             "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     logging:
       driver: json-file
       options:
