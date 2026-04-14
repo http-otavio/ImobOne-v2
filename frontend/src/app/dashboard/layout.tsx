@@ -1,18 +1,16 @@
 import { redirect } from 'next/navigation'
 import { headers } from 'next/headers'
-import { decodeSupabaseJwt } from '@/lib/session'
 import NavBar from '@/components/NavBar'
 import SessionGuard from '@/components/SessionGuard'
 
 /**
  * Dashboard layout — Server Component.
  *
- * Reads the access_token injected by middleware (x-access-token header),
- * decodes role from the Supabase JWT, and passes it down to the NavBar
- * and SessionGuard (client component that mounts useRefreshSession).
+ * Reads role and nome from headers injected by middleware.
+ * Role comes from the encrypted session cookie (set at login / mfa-challenge),
+ * NOT from JWT app_metadata (which Supabase doesn't populate for custom roles).
  *
- * Does NOT fetch the profile from admin_api here — each page SSR fetches
- * what it needs. This layout is intentionally lean.
+ * Authorization: RLS at database level — role here is display-only.
  */
 export default async function DashboardLayout({
   children,
@@ -21,25 +19,18 @@ export default async function DashboardLayout({
 }) {
   const headersList = await headers()
   const accessToken = headersList.get('x-access-token')
-  const expiresAt = Number(headersList.get('x-expires-at') ?? '0')
+  const expiresAt   = Number(headersList.get('x-expires-at') ?? '0')
+  const role        = (headersList.get('x-user-role') ?? 'corretor') as 'dono' | 'corretor'
+  const nome        = headersList.get('x-user-nome') ?? ''
 
   if (!accessToken) {
     redirect('/auth/login')
   }
 
-  const jwt = decodeSupabaseJwt(accessToken)
-  const role = jwt?.app_metadata?.role ?? 'corretor'
-  const email = jwt?.email ?? ''
-
   return (
     <div className="min-h-screen flex flex-col bg-slate-950">
-      {/* Top navigation bar */}
-      <NavBar role={role as 'dono' | 'corretor'} email={email} />
-
-      {/* Session refresh guard — proactively refreshes 2min before expiry */}
+      <NavBar role={role} nome={nome} />
       <SessionGuard expiresAt={expiresAt} />
-
-      {/* Page content */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-8">
         {children}
       </main>

@@ -1,7 +1,14 @@
-/** Lightweight date formatting utils — no date-fns dependency. */
+/** Lightweight date formatting utils — null-safe, no date-fns dependency. */
 
-export function formatDistanceToNow(dateStr: string): string {
-  const date = new Date(dateStr)
+function parseDate(dateStr: string | null | undefined): Date | null {
+  if (!dateStr) return null
+  const d = new Date(dateStr)
+  return isNaN(d.getTime()) ? null : d
+}
+
+export function formatDistanceToNow(dateStr: string | null | undefined): string {
+  const date = parseDate(dateStr)
+  if (!date) return '—'
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()
   const diffSeconds = Math.floor(diffMs / 1000)
@@ -14,8 +21,10 @@ export function formatDistanceToNow(dateStr: string): string {
   return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
 }
 
-export function formatDateTime(dateStr: string): string {
-  return new Date(dateStr).toLocaleString('pt-BR', {
+export function formatDateTime(dateStr: string | null | undefined): string {
+  const date = parseDate(dateStr)
+  if (!date) return '—'
+  return date.toLocaleString('pt-BR', {
     day: '2-digit',
     month: 'short',
     hour: '2-digit',
@@ -23,10 +32,22 @@ export function formatDateTime(dateStr: string): string {
   })
 }
 
-export function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('pt-BR', {
+export function formatDate(dateStr: string | null | undefined): string {
+  const date = parseDate(dateStr)
+  if (!date) return '—'
+  return date.toLocaleDateString('pt-BR', {
     day: '2-digit',
     month: 'long',
     year: 'numeric',
+  })
+}
+
+export function formatDateShort(dateStr: string | null | undefined): string {
+  const date = parseDate(dateStr)
+  if (!date) return '—'
+  return date.toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
   })
 }

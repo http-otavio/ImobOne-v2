@@ -50,13 +50,15 @@ export async function POST(request: NextRequest) {
       access_token: string
       refresh_token: string
       expires_at: number
-      user: { role: string; client_id: string; corretor_phone: string }
+      user: { role: string; nome?: string; client_id: string; corretor_phone: string }
     }
 
     const encrypted = await encryptSession({
       access_token:  newToken,
       refresh_token: refresh_token,
       expires_at:    expires_at,
+      role: user?.role ?? 'corretor',
+      nome: user?.nome ?? '',
     })
 
     const response = NextResponse.json({

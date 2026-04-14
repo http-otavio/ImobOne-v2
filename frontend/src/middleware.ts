@@ -58,11 +58,15 @@ export async function middleware(request: NextRequest) {
     return redirectToLogin(request)
   }
 
-  // ── Inject access_token for Server Components via request header ──────────
+  // ── Inject access_token + profile hints for Server Components ────────────
   const requestHeaders = new Headers(request.headers)
   requestHeaders.set('x-access-token', session.access_token)
   requestHeaders.set('x-refresh-token', session.refresh_token)
   requestHeaders.set('x-expires-at', String(session.expires_at))
+  // Role and nome come from the encrypted cookie (set at login/mfa-challenge).
+  // This is a display hint — all authorization still lives in DB RLS.
+  if (session.role) requestHeaders.set('x-user-role', session.role)
+  if (session.nome) requestHeaders.set('x-user-nome', session.nome)
 
   return NextResponse.next({ request: { headers: requestHeaders } })
 }

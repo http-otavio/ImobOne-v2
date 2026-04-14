@@ -3,7 +3,9 @@
 export interface SessionPayload {
   access_token: string
   refresh_token: string
-  expires_at: number  // unix timestamp (seconds)
+  expires_at: number    // unix timestamp (seconds)
+  role?: string         // 'dono' | 'corretor' — display hint, NOT a security decision
+  nome?: string         // display name from profiles table
 }
 
 // ─── User / Profile ───────────────────────────────────────────────────────────
