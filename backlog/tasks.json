@@ -230,3 +230,162 @@
       "blocks": []
     },
     {
+      "id": "weekly-owner-report",
+      "title": "Relatório semanal automático para o dono (WhatsApp + Dashboard)",
+      "description": "Todo domingo às 21h (ou segunda às 08h, configurável), o sistema gera e envia via WhatsApp um resumo executivo para o dono da imobiliária/construtora: leads atendidos na semana, visitas confirmadas, leads quentes (score >= threshold), pipeline estimado em R$ com base no score + valor dos imóveis de interesse, e maior objeção detectada. O mesmo relatório deve estar disponível no dashboard corporativo com visualização por semana e exportação em PDF/CSV. ICP: dono, não corretor.",
+      "acceptance_criteria": [
+        "Script report_engine.py (ou módulo em followup_engine.py) gera JSON com métricas semanais a partir do Supabase",
+        "Métricas obrigatórias: total_leads, visitas_confirmadas, leads_quentes, pipeline_estimado_brl, top_objecao",
+        "pipeline_estimado_brl = soma dos valores dos imóveis de interesse dos leads com score >= 6",
+        "Mensagem WhatsApp formatada enviada ao OPERATOR_NUMBER (dono) — nunca ao corretor",
+        "Endpoint GET /reports/weekly?client_id=X no dashboard backend retorna o mesmo JSON",
+        "Dashboard exibe histórico de relatórios semanais com gráfico de evolução de pipeline",
+        "Botão de exportação: PDF (via reportlab) e CSV no dashboard",
+        "Timer systemd imob-weekly-report.timer — OnCalendar=Sun *-*-* 21:00:00 BRT",
+        "Testes para cálculo de métricas com dados mock do Supabase"
+      ],
+      "context_files": [
+        "followup_engine.py",
+        "dashboard.html",
+        "dashboard/backend/main.py"
+      ],
+      "priority": "critical",
+      "status": "done",
+      "depends_on": [],
+      "blocks": ["pipeline-roi-calc"]
+    },
+    {
+      "id": "pipeline-roi-calc",
+      "title": "Cálculo de pipeline em R$ e ROI estimado para o dono",
+      "description": "Cruzar o intention_score de cada lead com o valor dos imóveis de interesse detectados na conversa. Calcular e persistir pipeline_value_brl no Supabase em leads. Exibir no dashboard corporativo como KPI principal: 'R$ X em pipeline ativo gerenciado pela Sofia'. Incluir projeção de VGV potencial por segmento (comprador, investidor, locatário).",
+      "acceptance_criteria": [
+        "Campo pipeline_value_brl adicionado em leads via migration Supabase",
+        "Webhook atualiza pipeline_value_brl a cada turno quando imóvel de interesse for identificado",
+        "Dashboard exibe KPI 'Pipeline Ativo' em R$ com breakdown por perfil de lead",
+        "Relatório semanal inclui pipeline_estimado_brl calculado dinamicamente",
+        "Testes para cálculo com imóvel identificado, sem imóvel identificado e múltiplos imóveis"
+      ],
+      "context_files": [
+        "whatsapp_webhook.py",
+        "dashboard.html"
+      ],
+      "priority": 9,
+      "status": "done",
+      "depends_on": [],
+      "blocks": []
+    },
+    {
+      "id": "google-calendar-integration",
+      "title": "Integração com Google Calendar do corretor na confirmação de visita",
+      "description": "Quando Sofia confirma uma visita e visita_agendada=true é setado, criar automaticamente um evento no Google Calendar do corretor responsável pelo lead. O evento deve conter: nome e telefone do lead, imóvel de interesse, resumo da conversa (gerado via Haiku), e link para o histórico completo no dashboard. O corretor vê a visita no seu calendário sem precisar criar manualmente.",
+      "acceptance_criteria": [
+        "Tool create_calendar_event(corretor_email, lead_data, slot) implementada em tools/calendar.py usando Google Calendar API",
+        "onboarding.json da seção 'corretores' inclui campo corretor_email para cada corretor",
+        "Quando visita_agendada=true, webhook chama create_calendar_event fire-and-forget via asyncio.create_task",
+        "Evento criado com: título 'Visita - [Nome Lead] - [Imóvel]', descrição com resumo Haiku, convidados: corretor + lead (se email disponível)",
+        "Fallback silencioso se Google Calendar API não configurada — não bloqueia o fluxo",
+        "Testes unitários com mock da Google Calendar API"
+      ],
+      "context_files": [
+        "whatsapp_webhook.py",
+        "tools/whatsapp.py"
+      ],
+      "priority": 8,
+      "status": "done",
+      "depends_on": [],
+      "blocks": []
+    },
+    {
+      "id": "portal-lead-capture",
+      "title": "Captura automática de leads de portais imobiliários (ZAP, VivaReal, OLX)",
+      "description": "Endpoint POST /portal-lead no webhook que recebe leads de portais (ZAP Imóveis, VivaReal, OLX) via webhook deles. Ao receber, normaliza o payload, cria o lead no Supabase e dispara a primeira mensagem da Sofia no WhatsApp do lead em até 2 minutos. Fecha o loop de captura sem depender do corretor ver o e-mail. ICP: o dono quer que nenhum lead de portal escape.",
+      "acceptance_criteria": [
+        "Endpoint POST /portal-lead aceita payloads de ZAP (formato JSON padrão), VivaReal e OLX",
+        "Normalizador mapeia campos de cada portal para o schema interno de lead",
+        "Lead criado no Supabase com source = 'portal_zap' | 'portal_vivareal' | 'portal_olx'",
+        "Sofia envia mensagem inicial ao lead em até 2 minutos após receber o webhook do portal",
+        "Deduplicação: se o número já existe na base, não cria lead duplicado — apenas registra novo contato e continua a conversa",
+        "Dashboard exibe 'Origem do lead' com breakdown por portal — visível para o dono",
+        "Testes para cada portal: normalização de payload, deduplicação, disparo da mensagem inicial"
+      ],
+      "context_files": [
+        "whatsapp_webhook.py",
+        "dashboard.html"
+      ],
+      "priority": 9,
+      "status": "done",
+      "depends_on": [],
+      "blocks": []
+    },
+    {
+      "id": "objection-analysis-report",
+      "title": "Análise de objeções recorrentes — inteligência de mercado para o dono",
+      "description": "Agregar padrões de objeções detectadas nas conversas da semana. Identificar as top 3 objeções que mais bloquearam leads (ex: 'prazo de entrega', 'valor do condomínio', 'localização'). Incluir no relatório semanal do dono e criar seção no dashboard corporativo com histórico de objeções por período. O dono usa isso para ajustar argumentação da equipe e estratégia de portfólio.",
+      "acceptance_criteria": [
+        "Campo objections_detected (JSONB array) adicionado em leads via migration Supabase",
+        "Webhook ou followup_engine extrai objeções via regex + Claude Haiku classifica categoria (prazo, preço, localização, financiamento, concorrente)",
+        "Relatório semanal inclui top_3_objections com frequência absoluta e % de leads afetados",
+        "Endpoint GET /reports/objections?client_id=X&period=week|month retorna ranking de objeções",
+        "Dashboard corporativo exibe gráfico de barras de objeções por período com filtro por data",
+        "Exportação CSV disponível no dashboard",
+        "Testes para classificação de objeções com 10 mensagens mock"
+      ],
+      "context_files": [
+        "whatsapp_webhook.py",
+        "followup_engine.py",
+        "dashboard.html"
+      ],
+      "priority": 7,
+      "status": "done",
+      "depends_on": ["weekly-owner-report"],
+      "blocks": []
+    },
+    {
+      "id": "post-visit-satisfaction",
+      "title": "Pesquisa de satisfação pós-visita automática",
+      "description": "48h após visita_agendada=true, Sofia envia mensagem de acompanhamento perguntando sobre a experiência na visita. Detecta sentimento na resposta (positivo/neutro/negativo) e atualiza o score do lead. Leads com feedback positivo sobem no pipeline; negativos recebem objeção mapeada para follow-up específico. Resultado visível no dashboard para o dono.",
+      "acceptance_criteria": [
+        "Novo cenário no followup_engine.py: 48h após visita_agendada=true, envia mensagem de pesquisa",
+        "Idempotência garantida via followup_events (event_type = 'pos_visita_pesquisa')",
+        "Resposta do lead processada pelo webhook: Claude Haiku classifica sentimento (positivo/neutro/negativo)",
+        "Campo post_visit_sentiment adicionado em leads no Supabase",
+        "Score de intenção ajustado: positivo +3, negativo mapeia objeção para followup_engine",
+        "Dashboard exibe taxa de satisfação pós-visita por período para o dono",
+        "Testes para envio, detecção de resposta e classificação de sentimento"
+      ],
+      "context_files": [
+        "followup_engine.py",
+        "whatsapp_webhook.py",
+        "dashboard.html"
+      ],
+      "priority": 6,
+      "status": "pending",
+      "depends_on": [],
+      "blocks": []
+    },
+    {
+      "id": "launch-mode-sku",
+      "title": "Modo Lançamento — SKU separado para eventos de lançamento imobiliário",
+      "description": "Criar uma modalidade de operação especial para lançamentos de empreendimentos. O dono ativa o 'Modo Lançamento' via dashboard ou endpoint. Sofia adota script específico de lançamento, gerencia fila VIP de leads pré-qualificados, e o dono recebe relatório diário durante o período do evento. Precificado como R$ 8-15k por evento — não incluso no mensalista.",
+      "acceptance_criteria": [
+        "Campo launch_mode_active (bool) + launch_config (JSONB) adicionados no onboarding do cliente",
+        "Endpoint POST /launch/activate e /launch/deactivate no pipeline_runner.py",
+        "Quando launch_mode_active=true, webhook injeta contexto do lançamento no system prompt da Sofia",
+        "Fila VIP: leads com score >= 8 no modo lançamento recebem notificação imediata ao corretor com prioridade 'LANÇAMENTO'",
+        "Relatório diário (não semanal) disparado ao dono durante o período ativo do lançamento",
+        "Dashboard exibe painel especial de lançamento com contador de leads, visitas e conversões",
+        "Testes para ativação, injeção de contexto no prompt e relatório diário"
+      ],
+      "context_files": [
+        "pipeline_runner.py",
+        "whatsapp_webhook.py",
+        "dashboard.html",
+        "_prompts_build/consultant_base.md"
+      ],
+      "priority": 8,
+      "status": "pending",
+      "depends_on": ["weekly-owner-report"],
+      "blocks": []
+    }
+  ]
+}
