@@ -41,7 +41,9 @@ from typing import Literal
 
 import httpx
 import redis as _redis_sync
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
@@ -56,7 +58,24 @@ logging.basicConfig(
 # ─── Configuração ─────────────────────────────────────────────────────────────
 
 SUPABASE_URL          = os.environ["SUPABASE_URL"]
-SUPABASE_SERVICE_KEY  = os.environ["SUPABASE_KEY"]           # service_role — nunca expor ao cliente
+# SUPABASE_SERVICE_KEY: chave service_role (bypassa RLS — usada apenas internamente)
+# Obter em: Supabase Dashboard → Settings → API → service_role secret
+# NUNCA usar a chave anon aqui — sem service_role, audit e admin ops não funcionam
+SUPABASE_SERVICE_KEY  = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_KEY", "")
+if not SUPABASE_SERVICE_KEY:
+    raise RuntimeError("SUPABASE_SERVICE_KEY não configurada. Configure em /opt/webhook.env antes de iniciar o admin API.")
+# Valida que não é a chave anon por acidente
+import base64 as _b64
+try:
+    _payload = _b64.b64decode(SUPABASE_SERVICE_KEY.split(".")[1] + "==")
+    if b'"anon"' in _payload or b'"role":"anon"' in _payload:
+        raise RuntimeError(
+            "SUPABASE_SERVICE_KEY contém a chave anon. Use a chave service_role. "
+            "Obtenha em: Supabase Dashboard → Settings → API → service_role secret"
+        )
+except (IndexError, Exception) as _e:
+    if "anon" in str(_e).lower():
+        raise
 EVOLUTION_API_URL     = os.getenv("EVOLUTION_API_URL", "https://api.otaviolabs.com")
 EVOLUTION_API_KEY     = os.getenv("EVOLUTION_API_KEY", "")
 EVOLUTION_INSTANCE    = os.getenv("EVOLUTION_INSTANCE", "devlabz")
@@ -87,11 +106,36 @@ def _sb_user(access_token: str, refresh_token: str = "") -> SupabaseClient:
 
 # ─── FastAPI app ───────────────────────────────────────────────────────────────
 
+@asynccontextmanager
+async def lifespan(app_: FastAPI):
+    """Startup + shutdown via lifespan (substitui on_event deprecated)."""
+    global _bg_task, _redis_client
+    try:
+        import redis.asyncio as aioredis
+        _redis_client = aioredis.from_url(REDIS_URL, decode_responses=False)
+        await _redis_client.ping()
+        log.info("Redis conectado em %s", REDIS_URL)
+    except Exception as e:
+        log.warning("Redis indisponível — cache de takeover desabilitado: %s", e)
+        _redis_client = None
+    _bg_task = asyncio.create_task(_poll_anomalies())
+    log.info("Admin API iniciada. Anomaly polling ativo (30s interval).")
+
+    yield  # ── aplicação rodando ──
+
+    if _bg_task:
+        _bg_task.cancel()
+    if _redis_client:
+        await _redis_client.aclose()
+    log.info("Admin API encerrada.")
+
+
 app = FastAPI(
     title="ImobOne Admin API",
     version="1.0.0",
     docs_url=None,   # desabilitado em produção — segurança
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -969,10 +1013,8 @@ async def _process_unrevoked_alerts() -> None:
 
 # ─── Startup / Shutdown ───────────────────────────────────────────────────────
 
-_bg_task: asyncio.Task | None = None
-
-# Redis client assíncrono para invalidar cache de takeover
-_redis_client = None
+_bg_task:      asyncio.Task | None = None
+_redis_client: object | None      = None   # redis.asyncio.Redis
 
 
 async def _invalidate_takeover_cache(lead_phone: str, active: bool) -> None:
@@ -990,27 +1032,6 @@ async def _invalidate_takeover_cache(lead_phone: str, active: bool) -> None:
         log.warning("Falha ao invalidar cache takeover no Redis: %s", e)
 
 
-@app.on_event("startup")
-async def on_startup():
-    global _bg_task, _redis_client
-    try:
-        import redis.asyncio as aioredis
-        _redis_client = aioredis.from_url(REDIS_URL, decode_responses=False)
-        await _redis_client.ping()
-        log.info("Redis conectado em %s", REDIS_URL)
-    except Exception as e:
-        log.warning("Redis indisponível — cache de takeover desabilitado: %s", e)
-        _redis_client = None
-    _bg_task = asyncio.create_task(_poll_anomalies())
-    log.info("Admin API iniciada. Anomaly polling ativo (30s interval).")
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    global _bg_task
-    if _bg_task:
-        _bg_task.cancel()
-    log.info("Admin API encerrada.")
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
