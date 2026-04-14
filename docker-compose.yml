@@ -158,6 +158,70 @@ services:
         max-size: "20m"
         max-file: "3"
 
+  # ─── Admin API — Painel Administrativo ─────────────────────────────────────
+  admin:
+    image: imovel-ai-agents:latest
+    command: ["python", "-m", "uvicorn", "admin_api:app",
+              "--host", "0.0.0.0", "--port", "8004",
+              "--workers", "1", "--log-level", "info"]
+    env_file:
+      - /opt/webhook.env
+    environment:
+      # Redis interno do stack imob
+      - REDIS_URL=redis://redis:6379
+    networks:
+      - imob_net      # Redis interno
+      - OtavioNet     # Traefik discovery
+    volumes:
+      # Acesso aos arquivos do cliente (relatórios, onboarding) — somente leitura
+      - pipeline_clients:/app/clients:ro
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        window: 60s
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+      labels:
+        # Traefik — rota pública app.imobone.com.br → porta 8004
+        - "traefik.enable=true"
+        - "traefik.docker.network=OtavioNet"
+        - "traefik.http.routers.imob-admin.rule=Host(`app.imobone.com.br`)"
+        - "traefik.http.routers.imob-admin.entrypoints=websecure"
+        - "traefik.http.routers.imob-admin.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.imob-admin.service=imob-admin"
+        - "traefik.http.services.imob-admin.loadbalancer.server.port=8004"
+        - "traefik.http.services.imob-admin.loadbalancer.passHostHeader=true"
+        # Middlewares de segurança — sem sufixo @provider (mesmo provider que o router)
+        - "traefik.http.routers.imob-admin.middlewares=imob-admin-security@swarm"
+        - "traefik.http.middlewares.imob-admin-security.headers.stsSeconds=31536000"
+        - "traefik.http.middlewares.imob-admin-security.headers.stsIncludeSubdomains=true"
+        - "traefik.http.middlewares.imob-admin-security.headers.stsPreload=true"
+        - "traefik.http.middlewares.imob-admin-security.headers.forceSTSHeader=true"
+        - "traefik.http.middlewares.imob-admin-security.headers.frameDeny=true"
+        - "traefik.http.middlewares.imob-admin-security.headers.contentTypeNosniff=true"
+        - "traefik.http.middlewares.imob-admin-security.headers.browserXssFilter=true"
+        - "traefik.http.middlewares.imob-admin-security.headers.referrerPolicy=strict-origin-when-cross-origin"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import httpx, sys; r = httpx.get('http://localhost:8004/health', timeout=5); sys.exit(0 if r.status_code == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
 # ─── Volumes persistentes ─────────────────────────────────────────────────────
 # Named volumes gerenciados pelo Docker — sobrevivem a restarts e redeploys.
 # Para inspecionar: docker volume ls | grep imob
@@ -185,3 +249,7 @@ networks:
   imob_net:
     driver: overlay
     attachable: true
+
+  # Rede compartilhada com Traefik — usada apenas pelo serviço admin
+  OtavioNet:
+    external: true
