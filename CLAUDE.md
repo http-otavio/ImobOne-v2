@@ -886,6 +886,76 @@ Sem essas variáveis, sistema opera normalmente — hook silenciosamente ignorad
 
 ---
 
+## Painel Administrativo — ✅ Backend (Abril 2026)
+
+`admin_api.py` — FastAPI na porta 8004, systemd `imob-admin.service`. Painel único com visão por perfil (dono/corretor), autenticação Supabase Auth (JWT), MFA obrigatório.
+
+**Arquitetura de segurança (não simplificar sem auditoria):**
+- **JWT pass-through**: FastAPI recebe JWT do usuário, cria `supabase_client.auth.set_session(access_token)`, todas as queries de dados passam por RLS. FastAPI nunca duplica autorização em Python.
+- **RLS como fonte única de verdade**: `profiles`, `leads`, `conversas`, `audit_reads`, `anomaly_alerts`, `takeover_audit` — todas com RLS habilitado. Dono vê client_id próprio; corretor vê apenas leads atribuídos via `assigned_corretor_id`.
+- **Audit middleware**: após cada resposta 2xx, grava `audit_reads` via service_role — não passa por RLS de insert (append-only por design).
+- **Anomaly detection ativa**: trigger Postgres em `audit_reads` detecta >20 leituras em 2min ou qualquer export → insere em `anomaly_alerts`. Background task no FastAPI (30s polling) revoga sessão via `auth.admin.delete_user_sessions()` + WhatsApp ao operador. Dono resolve manualmente no painel.
+- **`SUPABASE_SERVICE_KEY`**: variável separada com a service_role key (não a anon key). Necessária para audit_reads insert, admin ops (session revocation), criação de perfis. Obter em: Supabase Dashboard → Settings → API → `service_role secret`. Adicionar em `/opt/webhook.env`.
+- **CORS fixo**: apenas `https://app.imoboneai.com.br` + `localhost:3000` (dev). Sem wildcards.
+
+**Endpoints implementados:**
+| Endpoint | Método | Quem acessa |
+|----------|--------|-------------|
+| `/admin/auth/session` | POST | dono + corretor |
+| `/admin/leads` | GET | dono + corretor (RLS filtra) |
+| `/admin/leads/{phone}` | GET | dono + corretor (RLS filtra) |
+| `/admin/leads/{phone}/conversation` | GET | dono + corretor (RLS filtra) |
+| `/admin/leads/{phone}/takeover` | POST | dono + corretor |
+| `/admin/leads/{phone}/takeover/return` | POST | dono + corretor |
+| `/admin/leads/{phone}/messages` | POST | corretor (modo takeover ativo) |
+| `/admin/alerts` | GET | dono only |
+| `/admin/alerts/{id}/resolve` | PATCH | dono only (revoca sessão) |
+| `/admin/profiles` | GET + POST | dono only |
+| `/admin/reports/weekly` | GET | dono only |
+
+**Human Takeover — integração com webhook:**
+- `admin_api.py` ao iniciar takeover: seta `leads.human_takeover=true` + cache Redis `human_takeover:{phone}=1` (TTL 24h)
+- `whatsapp_webhook.py` verifica `_is_human_takeover_active(sender)` antes de acionar o LLM: Redis (caminho rápido) → fallback Supabase. Se ativo, persiste mensagem no histórico sem gerar resposta automática.
+- Ao devolver para Sofia: seta `human_takeover=false` + Redis `human_takeover:{phone}=0`
+- Registro imutável em `takeover_audit`: cada `takeover_start`, `takeover_return`, `message_sent`, `sofia_resumed`
+
+**Tabelas adicionadas nas Migrations 3–5 (Abril 2026):**
+| Migration | O que adiciona |
+|-----------|---------------|
+| `add_human_takeover_and_takeover_audit` | `leads`: `human_takeover`, `takeover_by`, `takeover_at`, `takeover_returned_at`, `assigned_corretor_id`; tabela `takeover_audit` (append-only, RLS) |
+| `rls_leads_and_conversas` | RLS em `leads` (dono vê tudo do client_id, corretor vê leads atribuídos); RLS em `conversas` (mesma lógica via JOIN lead_phone) |
+| `anomaly_detection_trigger` | Função `detect_anomaly_on_audit_read()` + trigger `trg_anomaly_on_audit_read`; view `v_pending_anomaly_alerts`; índice em `anomaly_alerts(user_id, alert_type)` WHERE resolved_at IS NULL |
+
+**Para ativar em produção:**
+```bash
+# 1. Obter service_role key: Supabase Dashboard → Settings → API → service_role secret
+# 2. Adicionar ao env:
+echo "SUPABASE_SERVICE_KEY=eyJ..." >> /opt/webhook.env
+echo "ADMIN_PORT=8004" >> /opt/webhook.env
+# 3. Iniciar serviço:
+systemctl enable --now imob-admin.service
+# 4. Verificar:
+systemctl status imob-admin.service
+curl http://localhost:8004/health
+```
+
+**Próximos passos do painel (não implementados):**
+- Cloudflare WAF em frente ao VPS (OWASP ruleset + Turnstile no login)
+- Nginx: HSTS, CSP, X-Frame-Options, X-Content-Type-Options
+- MFA enrollment flow no Next.js (bloqueia acesso até `profiles.mfa_enrolled=true`)
+- Frontend Next.js: role-based views, Supabase Realtime subscriptions (RLS channel filtering), takeover button, input de mensagem, lista de leads paginada
+- Testes de penteste: OWASP Top 10, IDOR, credential stuffing, insider threat, WebSocket RLS
+
+**Decisões técnicas do painel admin (não reabrir sem auditoria):**
+- JWT pass-through, não replicação de RLS em Python — única fonte de verdade é o banco
+- Active response (revogar sessão) é obrigatório — log sem ação é autópsia depois do fato
+- `SUPABASE_SERVICE_KEY` ≠ `SUPABASE_KEY` (anon) — admin_api.py valida isso no startup e recusa iniciar com chave anon
+- Domínio fixo `app.imoboneai.com.br` — sem subdomínios por cliente (complexidade desnecessária de TLS/CORS/cookies)
+- `takeover_audit` é append-only por design — `UPDATE` e `DELETE` bloqueados via RLS absolutamente
+
+---
+
 *Última atualização: Abril 2026 — google-calendar-integration deployado: tools/calendar.py (create_calendar_event via service account), _create_calendar_event_for_visit() fire-and-forget no webhook, corretor_email no onboarding, 20 testes. pipeline-roi-calc: migration Supabase (pipeline_value_brl), 15 testes. 121 testes totais passando (20 calendar + 15 pipeline + 50 portal + 36 report). portal_lead_capture.py deployado. Report Engine semanal (timer domingo 21h BRT). Nightly Squad executou 02:00 de 13/04 — 3 bugs corrigidos. WhatsApp devlabz state: open. Pipeline Runner ativo (porta 8003). Fase 3 mapeada. CRM 6 adapters. Ativar calendar: GOOGLE_CALENDAR_CREDENTIALS_JSON no webhook.env + corretor_email por corretor no onboarding.json (multi-corretor routing automático por bairro). Pendente: 360dialog para primeiro cliente real.*
 *Última atualização: Abril 2026 — objection-analysis-report: objection_engine.py (Haiku primário, regex apenas para casos inequívocos — 7 categorias), /reports/objections endpoint no pipeline runner (period=week|month), top-3 objeções no WhatsApp semanal, migration add_objections_detected.sql, 45 testes. 171 testes totais (45 objection + 20 calendar + 15 pipeline + 50 portal + 36 report). Wiring no webhook: detect_and_save_objection fire-and-forget após score de intenção. google-calendar-integration: multi-corretor routing por bairro (_resolve_corretor_email_for_lead). Nightly Squad ativo (02:00 BRT). Pipeline Runner (porta 8003). Pendente: 360dialog para primeiro cliente real.*
+*Última atualização: Abril 2026 — Painel Administrativo (backend): admin_api.py (FastAPI porta 8004), JWT pass-through completo, audit middleware, anomaly detection com resposta ativa (revocação de sessão + WhatsApp), human takeover integrado com webhook. Migrations 3+4+5: human_takeover em leads, takeover_audit (append-only), RLS em leads/conversas, trigger de anomalia. whatsapp_webhook.py: _is_human_takeover_active() (Redis + Supabase fallback), _assign_corretor_to_lead() ao notificar. systemd: imob-admin.service. PENDENTE para ativar: SUPABASE_SERVICE_KEY no webhook.env (Supabase Dashboard → Settings → API → service_role secret). Próximos: Cloudflare WAF, Nginx headers, Next.js frontend do painel.*
 *Este documento é a fonte da verdade do projeto. Qualquer decisão que conflite com ele deve passar pelo arquiteto auditor antes de ser implementada.*
