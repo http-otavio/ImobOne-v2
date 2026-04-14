@@ -85,7 +85,7 @@ REDIS_URL             = os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
 
 # CORS: apenas o domínio fixo do painel — sem wildcards em produção
 ALLOWED_ORIGINS = [
-    "https://app.imoboneai.com.br",
+    "https://app.imobone.com.br",
     "http://localhost:3000",  # dev local Next.js
 ]
 
