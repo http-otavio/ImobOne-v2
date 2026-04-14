@@ -103,50 +103,6 @@ def _ctx_corretor_email() -> str:
     return _client_ctx.get().get("corretor_email", os.getenv("CORRETOR_EMAIL", ""))
 
 
-def _resolve_corretor_email_for_lead(imovel_id: str) -> str:
-    """
-    Retorna o e-mail do corretor responsável pelo bairro do imóvel.
-
-    Lógica:
-    1. Busca o imóvel no portfólio → obtém bairro.
-    2. Percorre `corretores` do onboarding buscando correspondência de bairro
-       (case-insensitive, partial match).
-    3. Retorna o `corretor_email` do corretor responsável.
-    4. Fallback: `_ctx_corretor_email()` (env var ou campo único no registry).
-    """
-    try:
-        portfolio = _load_portfolio_dict()
-        imovel = portfolio.get(imovel_id, {})
-        imovel_bairro = (imovel.get("bairro", "") or "").lower().strip()
-
-        if imovel_bairro:
-            client_id = _ctx_client_id()
-            try:
-                from setup_pipeline import carregar_onboarding
-                onboarding = carregar_onboarding(client_id)
-                corretores = onboarding.get("corretores", [])
-                for corretor in corretores:
-                    bairros = [b.lower().strip() for b in corretor.get("bairros_regioes", [])]
-                    # Partial match bilateral: "jardins" bate "Jardins Paulista" e vice-versa
-                    if any(imovel_bairro in b or b in imovel_bairro for b in bairros):
-                        email = corretor.get("corretor_email", "")
-                        if email:
-                            log.debug(
-                                "calendar: roteado para %s → %s (bairro: %s)",
-                                corretor.get("nome", "?"), email, imovel_bairro,
-                            )
-                            return email
-            except Exception as e:
-                log.debug("calendar: erro ao resolver corretor por bairro: %s", e)
-
-    except Exception as e:
-        log.debug("calendar: _resolve_corretor_email_for_lead falhou: %s", e)
-
-    # Fallback: corretor padrão do cliente (env var ou clients_registry.json)
-    return _ctx_corretor_email()
-
-
-
 def _ctx_voice_id() -> str:
     return _client_ctx.get().get("elevenlabs_voice_id", ELEVENLABS_VOICE_ID)
 
@@ -981,7 +937,112 @@ async def _supabase_update_score(
         log.warning("Falha ao atualizar score Supabase: %s", e)
 
 
+# ─── Human Takeover — verificação antes de responder ─────────────────────────
+
+async def _is_human_takeover_active(sender: str) -> bool:
+    """
+    Verifica se o corretor assumiu a conversa com este sender.
+    Estratégia dual:
+      1. Redis key "human_takeover:{sender}" (TTL 24h) — caminho rápido
+      2. Fallback: consulta Supabase leads.human_takeover diretamente
+    Retorna True se takeover ativo, False caso contrário.
+    """
+    # Caminho 1: Redis (hot, sem latência extra)
+    if redis_client:
+        try:
+            val = await redis_client.get(f"human_takeover:{sender}")
+            if val is not None:
+                return val.decode() == "1"
+        except Exception:
+            pass  # Redis indisponível — fallback para Supabase
+
+    # Caminho 2: Supabase (cold, authoritative)
+    sb = _get_supabase()
+    if not sb:
+        return False
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: (
+            sb.table("leads")
+              .select("human_takeover")
+              .eq("lead_phone", sender)
+              .eq("human_takeover", True)
+              .limit(1)
+              .execute()
+        ))
+        active = bool(result.data)
+        # Popula Redis para as próximas mensagens (TTL 24h)
+        if redis_client:
+            try:
+                await redis_client.set(
+                    f"human_takeover:{sender}",
+                    "1" if active else "0",
+                    ex=86400
+                )
+            except Exception:
+                pass
+        return active
+    except Exception as e:
+        log.warning("Falha ao verificar human_takeover para %s: %s", sender, e)
+        return False
+
+
 # ─── Notificação ao corretor ──────────────────────────────────────────────────
+
+async def _assign_corretor_to_lead(sender: str, corretor_phone: str) -> None:
+    """
+    Resolve o UUID do corretor em profiles pelo telefone e seta assigned_corretor_id no lead.
+    Operação fire-and-forget — não bloqueia o fluxo de atendimento.
+    Usa service_role (SUPABASE_KEY) para contornar RLS — operação interna, não via JWT.
+    """
+    sb = _get_supabase()
+    if not sb:
+        return
+    try:
+        loop = asyncio.get_event_loop()
+
+        # Normaliza telefone: remove '+' para comparação
+        normalized = corretor_phone.lstrip("+")
+
+        # Busca UUID do corretor pelo telefone cadastrado em profiles
+        result = await loop.run_in_executor(None, lambda: (
+            sb.table("profiles")
+              .select("id")
+              .eq("corretor_phone", normalized)
+              .eq("is_active", True)
+              .limit(1)
+              .execute()
+        ))
+
+        if not result.data:
+            log.info(
+                "Corretor %s não encontrado em profiles — assigned_corretor_id não setado para %s",
+                normalized, sender
+            )
+            return
+
+        corretor_uuid = result.data[0]["id"]
+
+        # Seta assigned_corretor_id no lead (upsert pela PK composta)
+        await loop.run_in_executor(None, lambda: (
+            sb.table("leads")
+              .upsert(
+                  {
+                      "client_id":            _ctx_client_id(),
+                      "lead_phone":           sender,
+                      "assigned_corretor_id": corretor_uuid,
+                  },
+                  on_conflict="client_id,lead_phone"
+              )
+              .execute()
+        ))
+        log.info(
+            "assigned_corretor_id=%s setado para lead %s (corretor %s)",
+            corretor_uuid, sender, normalized
+        )
+    except Exception as e:
+        log.warning("Falha ao atribuir corretor ao lead %s: %s", sender, e)
+
 
 async def _should_notify_corretor(sender: str, score: int) -> bool:
     """
@@ -1092,6 +1153,9 @@ async def _notify_corretor(
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, send_whatsapp_message, corretor_num, msg)
     log.info("Corretor notificado sobre lead %s (score=%d, resumo gerado)", sender, score)
+
+    # Atribui corretor ao lead no Supabase para RLS do painel admin
+    asyncio.create_task(_assign_corretor_to_lead(sender, corretor_num))
 
     # Marca cooldown no Redis
     cooldown_key = f"whatsapp:corretor_notified:{sender}"
@@ -1632,6 +1696,11 @@ async def _create_calendar_event_for_visit(
         log.warning("calendar: tools/calendar.py não disponível")
         return
 
+    corretor_email = _ctx_corretor_email()
+    if not corretor_email:
+        log.debug("calendar: corretor_email não configurado — pulando criação de evento")
+        return
+
     try:
         # Dados do lead
         lead_data = _memory_leads.get(sender, {}) if hasattr(sys.modules[__name__], "_memory_leads") else {}
@@ -1662,12 +1731,6 @@ async def _create_calendar_event_for_visit(
 
         imovel = portfolio.get(imovel_id, {})
         imovel_descricao = format_imovel_descricao(imovel) if imovel else imovel_id
-
-        # Resolve o corretor responsável pelo bairro do imóvel (agora que imovel_id está definido)
-        corretor_email = _resolve_corretor_email_for_lead(imovel_id)
-        if not corretor_email:
-            log.debug("calendar: corretor_email não configurado — pulando criação de evento")
-            return
 
         # Parseia data/hora da visita
         visit_dt = _parse_visit_datetime_from_reply(reply) if reply else None
@@ -1913,6 +1976,13 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
     evitando race condition no histórico Redis.
     """
     async with _sender_locks[sender]:
+        # ── Verifica human_takeover — não responde se corretor assumiu ────────
+        if await _is_human_takeover_active(sender):
+            # Persiste mensagem do lead para histórico sem gerar resposta automática
+            asyncio.create_task(_supabase_append_conversa(sender, "user", text or "[mídia]"))
+            log.info("Mensagem de %s ignorada pela Sofia — human_takeover ativo", sender)
+            return
+
         # ── Resolve mídia para texto ──────────────────────────────────────────
         user_message = text
 
@@ -1960,13 +2030,6 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
 
         # ── Atualiza score de intenção ─────────────────────────────────────────
         new_score, score_delta, score_breakdown = await _update_lead_score(sender, user_message)
-
-        # ── Detecta objeção na mensagem do lead (fire-and-forget) ────────────
-        try:
-            from objection_engine import detect_and_save_objection as _detect_obj
-            asyncio.create_task(_detect_obj(sender, user_message, _ctx_client_id()))
-        except ImportError:
-            pass  # objection_engine opcional — não bloqueia o fluxo
 
         # ── Consulta LLM ──────────────────────────────────────────────────────
         history = await get_history(redis_client, sender)
