@@ -14,7 +14,8 @@
     "react-dom": "^18.3.1",
     "jose": "^5.9.6",
     "@supabase/supabase-js": "^2.45.0",
-    "lucide-react": "^0.460.0"
+    "lucide-react": "^0.460.0",
+    "qrcode.react": "^4.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

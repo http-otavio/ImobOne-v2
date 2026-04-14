@@ -20,7 +20,8 @@ import { decryptSession, isExpired, COOKIE_NAME } from '@/lib/session'
 
 const PUBLIC_PREFIXES = [
   '/auth/login',
-  '/api/auth/',      // login, logout, refresh route handlers
+  '/auth/mfa',       // MFA enrollment — user has no cookie yet
+  '/api/auth/',      // login, logout, refresh, mfa route handlers
   '/api/webhooks/',  // inbound webhook tunnel (Evolution API, portals)
   '/_next/',
   '/favicon.ico',

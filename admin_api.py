@@ -186,6 +186,16 @@ class ProfileCreateRequest(BaseModel):
         return v.lstrip("+").strip()
 
 
+class LoginRequest(BaseModel):
+    email: str = Field(..., max_length=254)
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+class MfaChallengeRequest(BaseModel):
+    factor_id: str = Field(..., min_length=1, max_length=200)
+    code: str = Field(..., pattern=r"^\d{6}$")
+
+
 # ─── Auth dependency ──────────────────────────────────────────────────────────
 
 class AuthContext:
@@ -281,6 +291,63 @@ def _require_dono(auth: AuthContext = Depends(_get_auth)) -> AuthContext:
     if auth.role != "dono":
         raise HTTPException(status_code=403, detail="Acesso exclusivo para donos.")
     return auth
+
+
+async def _get_auth_pre_mfa(
+    request: Request,
+    authorization: str = Header(..., alias="Authorization"),
+    x_refresh_token: str = Header(default="", alias="X-Refresh-Token"),
+) -> AuthContext:
+    """
+    Validação leve de JWT — idêntica a _get_auth mas sem verificar mfa_enrolled.
+    Usada pelos endpoints de MFA enrollment (/admin/auth/mfa/*) para que o
+    usuário possa completar o enrollment mesmo sem ter MFA configurado ainda.
+    """
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authorization header inválido.")
+
+    access_token = authorization.removeprefix("Bearer ").strip()
+    if not access_token:
+        raise HTTPException(status_code=401, detail="Token ausente.")
+
+    try:
+        user_response = _sb_service.auth.get_user(access_token)
+        user = user_response.user
+        if not user:
+            raise HTTPException(status_code=401, detail="Token inválido ou expirado.")
+    except Exception as e:
+        log.warning("Falha na validação de JWT (pre_mfa): %s", e)
+        raise HTTPException(status_code=401, detail="Token inválido ou expirado.") from e
+
+    try:
+        profile_res = _sb_service.table("profiles") \
+            .select("id, role, client_id, corretor_phone, is_active") \
+            .eq("id", user.id) \
+            .single() \
+            .execute()
+        profile = profile_res.data
+    except Exception as e:
+        raise HTTPException(status_code=403, detail="Perfil não encontrado.") from e
+
+    if not profile:
+        raise HTTPException(status_code=403, detail="Perfil não encontrado.")
+    if not profile.get("is_active"):
+        raise HTTPException(status_code=403, detail="Conta inativa.")
+
+    ip = request.headers.get("CF-Connecting-IP") or \
+         request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or \
+         (request.client.host if request.client else "unknown")
+
+    return AuthContext(
+        user_id        = str(user.id),
+        role           = profile["role"],
+        client_id      = profile["client_id"],
+        access_token   = access_token,
+        refresh_token  = x_refresh_token,
+        corretor_phone = profile.get("corretor_phone", ""),
+        ip             = ip,
+        user_agent     = request.headers.get("User-Agent", ""),
+    )
 
 
 # ─── Audit middleware ─────────────────────────────────────────────────────────
@@ -391,13 +458,163 @@ async def health():
 
 
 @app.post("/admin/auth/session")
-async def get_session(auth: AuthContext = Depends(_get_auth)):
-    """Valida JWT e retorna perfil do usuário. Usado pelo frontend na inicialização."""
+async def create_session(body: LoginRequest, request: Request):
+    """
+    Login com email e senha. Retorna tokens JWT se autenticação e perfil ok.
+    Se mfa_enrolled=false retorna 403 com mfa_required=true e os tokens temporários
+    para o frontend redirecionar ao fluxo de enrollment.
+    """
+    # 1. Autenticar com Supabase (sign_in_with_password)
+    loop = asyncio.get_event_loop()
+    try:
+        auth_resp = await loop.run_in_executor(
+            None,
+            lambda: _sb_service.auth.sign_in_with_password(
+                {"email": body.email, "password": body.password}
+            ),
+        )
+    except Exception as e:
+        log.warning("Falha no sign_in_with_password para %s: %s", body.email, e)
+        raise HTTPException(status_code=401, detail="Credenciais inválidas.")
+
+    session = getattr(auth_resp, "session", None)
+    if not session:
+        raise HTTPException(status_code=401, detail="Credenciais inválidas.")
+
+    access_token  = session.access_token
+    refresh_token = session.refresh_token
+    expires_at    = int(getattr(session, "expires_at", 0))
+
+    # 2. Buscar perfil (service_role — bypass RLS para leitura de metadados)
+    try:
+        profile_res = await loop.run_in_executor(
+            None,
+            lambda: _sb_service.table("profiles")
+                .select("id, role, client_id, corretor_phone, mfa_enrolled, is_active")
+                .eq("id", str(auth_resp.user.id))
+                .single()
+                .execute(),
+        )
+        profile = profile_res.data
+    except Exception as e:
+        log.warning("Perfil não encontrado para %s: %s", body.email, e)
+        raise HTTPException(status_code=403, detail="Perfil não encontrado ou conta não provisionada.")
+
+    if not profile:
+        raise HTTPException(status_code=403, detail="Perfil não encontrado.")
+    if not profile.get("is_active"):
+        raise HTTPException(status_code=403, detail="Conta inativa.")
+
+    # 3. MFA obrigatório — retorna tokens para o frontend completar o enrollment
+    if not profile.get("mfa_enrolled"):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "mfa_required":   True,
+                "access_token":   access_token,
+                "refresh_token":  refresh_token,
+                "message":        "MFA obrigatório. Complete o enrollment antes de acessar o painel.",
+            },
+        )
+
+    # 4. Tudo ok — retorna tokens completos
     return {
-        "user_id":        auth.user_id,
-        "role":           auth.role,
-        "client_id":      auth.client_id,
-        "corretor_phone": auth.corretor_phone,
+        "access_token":  access_token,
+        "refresh_token": refresh_token,
+        "expires_at":    expires_at,
+        "user": {
+            "role":           profile["role"],
+            "client_id":      profile["client_id"],
+            "corretor_phone": profile.get("corretor_phone", ""),
+        },
+    }
+
+
+@app.post("/admin/auth/mfa/setup")
+async def mfa_setup(auth: AuthContext = Depends(_get_auth_pre_mfa)):
+    """
+    Inicia o enrollment de TOTP para o usuário autenticado.
+    Retorna factor_id, qr_code (data URI renderizável) e totp_uri (otpauth://).
+    Deve ser chamado com o token temporário retornado no 403 do login.
+    """
+    loop = asyncio.get_event_loop()
+    user_client = _sb_user(auth.access_token, auth.refresh_token)
+
+    try:
+        enroll_resp = await loop.run_in_executor(
+            None,
+            lambda: user_client.auth.mfa.enroll(
+                {"factor_type": "totp", "friendly_name": "ImobOne Painel"}
+            ),
+        )
+    except Exception as e:
+        log.error("Falha no MFA enroll para user_id=%s: %s", auth.user_id, e)
+        raise HTTPException(status_code=500, detail="Falha ao iniciar enrollment MFA.")
+
+    totp = getattr(enroll_resp, "totp", None)
+    if not totp:
+        raise HTTPException(status_code=500, detail="Resposta de enrollment inválida.")
+
+    return {
+        "factor_id": enroll_resp.id,
+        "totp_uri":  totp.uri,
+        "qr_code":   totp.qr_code,
+        "secret":    totp.secret,
+    }
+
+
+@app.post("/admin/auth/mfa/challenge")
+async def mfa_challenge(
+    body: MfaChallengeRequest,
+    auth: AuthContext = Depends(_get_auth_pre_mfa),
+):
+    """
+    Verifica o código TOTP e finaliza o enrollment MFA.
+    Em sucesso: marca mfa_enrolled=true no perfil e retorna tokens completos.
+    """
+    loop = asyncio.get_event_loop()
+    user_client = _sb_user(auth.access_token, auth.refresh_token)
+
+    try:
+        verify_resp = await loop.run_in_executor(
+            None,
+            lambda: user_client.auth.mfa.challenge_and_verify(
+                {"factor_id": body.factor_id, "code": body.code}
+            ),
+        )
+    except Exception as e:
+        log.warning("MFA challenge_and_verify falhou para user_id=%s: %s", auth.user_id, e)
+        raise HTTPException(status_code=400, detail="Código MFA inválido ou expirado.")
+
+    # Extrai sessão do response (pode ser .session ou o próprio objeto)
+    session = getattr(verify_resp, "session", None) or verify_resp
+    access_token  = getattr(session, "access_token",  auth.access_token)
+    refresh_token = getattr(session, "refresh_token", auth.refresh_token)
+    expires_at    = int(getattr(session, "expires_at", 0))
+
+    # Marca mfa_enrolled=true no perfil via service_role
+    try:
+        await loop.run_in_executor(
+            None,
+            lambda: _sb_service.table("profiles")
+                .update({"mfa_enrolled": True})
+                .eq("id", auth.user_id)
+                .execute(),
+        )
+        log.info("mfa_enrolled=true setado para user_id=%s", auth.user_id)
+    except Exception as e:
+        log.error("Falha ao marcar mfa_enrolled para user_id=%s: %s", auth.user_id, e)
+        # Não bloqueia — o verify já foi com sucesso, o próximo login verificará
+
+    return {
+        "access_token":  access_token,
+        "refresh_token": refresh_token,
+        "expires_at":    expires_at,
+        "user": {
+            "role":           auth.role,
+            "client_id":      auth.client_id,
+            "corretor_phone": auth.corretor_phone,
+        },
     }
 
 

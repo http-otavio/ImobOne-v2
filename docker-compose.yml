@@ -241,7 +241,7 @@ services:
       - /opt/webhook.env
     environment:
       - NODE_ENV=production
-      - ADMIN_API_URL=http://admin_api:8004
+      - ADMIN_API_URL=http://admin:8004
       # SESSION_SECRET e NEXT_PUBLIC_SUPABASE_* vêm do webhook.env
     networks:
       - imob_net      # acesso interno ao admin_api:8004

@@ -2,6 +2,7 @@
 const nextConfig = {
   output: 'standalone',
 
+  // CORS / headers for security
   async headers() {
     return [
       {
