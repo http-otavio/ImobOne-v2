@@ -1781,6 +1781,75 @@ async def _create_calendar_event_for_visit(
         log.warning("_create_calendar_event_for_visit: %s", e)
 
 
+async def _generate_and_send_dossie(sender: str, history: list[dict]) -> None:
+    """
+    Gera o Dossiê de Caviar e envia ao corretor quando Sofia confirma visita.
+
+    Pipeline:
+        1. Busca dados do lead no Supabase (nome, score, pipeline, visit_date)
+        2. Resolve número do corretor via contexto
+        3. Delega geração + PDF + envio para tools/dossie.py (via run_in_executor)
+
+    Fire-and-forget — nunca bloqueia o fluxo principal.
+    """
+    try:
+        from tools.dossie import build_and_send_dossie
+    except ImportError:
+        log.warning("dossie: tools/dossie.py não disponível — dossiê não gerado")
+        return
+
+    corretor_phone = _ctx_corretor_number()
+    if not corretor_phone:
+        log.info("dossie: CORRETOR_NUMBER não configurado — pulando")
+        return
+
+    # Busca dados complementares do lead
+    sb = _get_supabase()
+    lead_name_db:   str | None   = None
+    score:          int          = 0
+    pipeline:       float | None = None
+    visit_date_str: str | None   = None
+
+    try:
+        r = await asyncio.get_event_loop().run_in_executor(None, lambda: (
+            sb.table("leads")
+              .select("lead_name,intention_score,pipeline_value_brl,visita_confirmada_at")
+              .eq("lead_phone", sender)
+              .eq("client_id", _ctx_client_id())
+              .limit(1)
+              .execute()
+        ))
+        if r.data:
+            row           = r.data[0]
+            lead_name_db  = row.get("lead_name") or None
+            score         = int(row.get("intention_score") or 0)
+            pipeline      = row.get("pipeline_value_brl")
+            raw_dt        = row.get("visita_confirmada_at")
+            if raw_dt:
+                # Normaliza timestamp Postgres → legível
+                visit_date_str = raw_dt[:16].replace("T", " ") + "h"
+    except Exception as e:
+        log.warning("dossie: falha ao buscar dados do lead %s: %s", sender, e)
+
+    imobiliaria = ONBOARDING.get("nome_imobiliaria", "Imobiliária")
+    client_id   = _ctx_client_id()
+
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, lambda: build_and_send_dossie(
+            history=history,
+            lead_name=lead_name_db,
+            lead_phone=sender,
+            corretor_phone=corretor_phone,
+            score=score,
+            pipeline=float(pipeline) if pipeline else None,
+            visit_date=visit_date_str,
+            client_id=client_id,
+            imobiliaria=imobiliaria,
+        ))
+    except Exception as e:
+        log.error("dossie: falha no pipeline para %s: %s", sender, e)
+
 
 async def _update_pipeline_value(sender: str, imovel_id: str) -> None:
     """
@@ -1847,13 +1916,112 @@ async def _update_pipeline_value(sender: str, imovel_id: str) -> None:
 # ─── Comandos de operador via WhatsApp ───────────────────────────────────────
 # O corretor envia para o número da Sofia:
 #   #assumir 5511999998888         → ativa human mode para esse lead
-#   #assumir 5511999998888 motivo  → com nota opcional
-#   #devolver 5511999998888        → devolve para Sofia
+async def _send_takeover_context_brief(operator_phone: str, lead_phone: str) -> None:
+    """
+    Gera e envia ao corretor um resumo de contexto da conversa com o lead.
+    Chamado via fire-and-forget quando o corretor usa /assumir.
+    Usa Claude Haiku — custo ~$0.001. Não bloqueia o fluxo do operador.
+    """
+    try:
+        history = await get_history(redis_client, lead_phone) if redis_client else []
+        if not history:
+            send_whatsapp_message(
+                operator_phone,
+                f"📋 *Contexto — {lead_phone}*\nNenhuma conversa registrada ainda."
+            )
+            return
+
+        # Busca nome do lead no Supabase
+        lead_name = None
+        sb = _get_supabase()
+        if sb:
+            try:
+                r = await asyncio.get_event_loop().run_in_executor(None, lambda: (
+                    sb.table("leads")
+                      .select("lead_name,intention_score,pipeline_value_brl,visita_agendada")
+                      .eq("lead_phone", lead_phone)
+                      .eq("client_id", _ctx_client_id())
+                      .limit(1)
+                      .execute()
+                ))
+                if r.data:
+                    lead_name = r.data[0].get("lead_name")
+                    score = r.data[0].get("intention_score", 0)
+                    pipeline = r.data[0].get("pipeline_value_brl")
+                    visita = r.data[0].get("visita_agendada", False)
+                else:
+                    score, pipeline, visita = 0, None, False
+            except Exception:
+                score, pipeline, visita = 0, None, False
+        else:
+            score, pipeline, visita = 0, None, False
+
+        # Monta histórico reduzido (últimos 10 turnos)
+        recent = history[-10:]
+        history_text = "\n".join(
+            f"{'Lead' if m['role'] == 'user' else 'Sofia'}: {m['content'][:200]}"
+            for m in recent
+        )
+
+        prompt = f"""Você é um assistente de briefing para corretores de imóveis de alto padrão.
+Analise esta conversa entre Sofia (IA) e o lead, e produza um briefing conciso.
+
+Lead: {lead_name or lead_phone}
+Score de intenção: {score}/20{' — VISITA CONFIRMADA' if visita else ''}
+{f'Pipeline estimado: R$ {pipeline:,.0f}'.replace(',', '.') if pipeline else ''}
+
+Conversa recente:
+{history_text}
+
+Produza um briefing para o corretor que assume agora, em formato WhatsApp (sem markdown pesado).
+Inclua exatamente estas seções:
+🎯 *O que o lead quer* — em 1-2 linhas
+💰 *Budget e prazo* — o que foi declarado
+🔥 *Sinal mais quente* — o sinal de intenção mais forte detectado
+⚠️ *Risco ou objeção* — a principal objeção ou hesitação (se houver)
+⚡ *Próximo passo sugerido* — ação concreta para o corretor fazer agora
+
+Seja direto. Máximo 250 palavras. Não use asteriscos extras nem bullet points."""
+
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        msg = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=400,
+                messages=[{"role": "user", "content": prompt}]
+            )
+        )
+        brief = msg.content[0].text.strip() if msg.content else "Sem contexto disponível."
+
+        header = f"📋 *Briefing — {lead_name or lead_phone}*\n\n"
+        send_whatsapp_message(operator_phone, header + brief)
+        log.info("[TAKEOVER] Briefing enviado para %s sobre lead %s", operator_phone, lead_phone)
+
+    except Exception as e:
+        log.warning("[TAKEOVER] Falha ao gerar briefing de contexto: %s", e)
+        try:
+            send_whatsapp_message(
+                operator_phone,
+                f"📋 Contexto de {lead_phone}: falha ao gerar resumo automático. "
+                "Verifique o histórico no dashboard."
+            )
+        except Exception:
+            pass
+
+
+# ── Comandos do operador via WhatsApp ────────────────────────────────────────
+#   #assumir 5511999998888 motivo  → com nota opcional (alias: /assumir)
+#   #devolver 5511999998888        → devolve para Sofia (alias: /sofia, /devolver)
 #   #status 5511999998888          → verifica se está em human mode
 #   #leads                         → lista leads quentes
+#
+# Sintaxe com / também aceita:
+#   /assumir 5511999998888
+#   /sofia 5511999998888
 
 _OPERATOR_CMD_RE = re.compile(
-    r'^#(assumir|devolver|status|leads)\s*(\d{10,15})?\s*(.*)?$',
+    r'^[#/](assumir|devolver|sofia|status|leads)\s*(\d{10,15})?\s*(.*)?$',
     re.IGNORECASE
 )
 
@@ -1864,7 +2032,7 @@ async def _handle_operator_command(operator_phone: str, text: str) -> bool:
     Retorna True se era um comando (e foi processado), False caso contrário.
     """
     text_stripped = text.strip()
-    if not text_stripped.startswith('#'):
+    if not (text_stripped.startswith('#') or text_stripped.startswith('/')):
         return False
 
     m = _OPERATOR_CMD_RE.match(text_stripped)
@@ -1875,32 +2043,56 @@ async def _handle_operator_command(operator_phone: str, text: str) -> bool:
     cmd = cmd.lower()
     note = (note or "").strip()
 
+    # Normaliza aliases: /sofia → devolver
+    if cmd == "sofia":
+        cmd = "devolver"
+
     loop = asyncio.get_event_loop()
 
     if cmd == "assumir":
         if not lead_phone:
             await loop.run_in_executor(None, send_whatsapp_message,
                 operator_phone,
-                "Formato: #assumir 5511999998888 [motivo opcional]"
+                "Formato: /assumir 5511999998888 [motivo opcional]\n"
+                "Também aceito: #assumir 5511999998888"
             )
             return True
+
         await _set_human_mode_triggered_by(
             lead_phone, True,
             triggered_by="whatsapp_command",
             operator=operator_phone,
             note=note or "Assumido via WhatsApp"
         )
-        # Renova TTL no Redis com triggered_by correto
+
+        # Renova TTL no Redis
         if redis_client:
             try:
                 key = f"whatsapp:human_mode:{_ctx_client_id()}:{lead_phone}"
                 await redis_client.setex(key, HUMAN_MODE_TTL_HOURS * 3600, operator_phone)
             except Exception:
                 pass
+
+        # ── Mensagem de transição neutra para o lead ──────────────────────────
+        # Enviada pela Sofia antes de silenciar — o lead não percebe a troca
+        transition_msg = (
+            "Um momento — vou te conectar com um dos nossos consultores "
+            "para os próximos detalhes. 🤝"
+        )
+        await loop.run_in_executor(None, send_whatsapp_message, lead_phone, transition_msg)
+
+        # ── Resumo de contexto para o corretor (Haiku, fire-and-forget) ──────
+        asyncio.create_task(
+            _send_takeover_context_brief(operator_phone, lead_phone)
+        )
+
+        # ── Confirmação para o operador ───────────────────────────────────────
         await loop.run_in_executor(None, send_whatsapp_message,
             operator_phone,
-            f"Conversa com {lead_phone} assumida. Sofia em silencio por ate {HUMAN_MODE_TTL_HOURS}h. "
-            f"Envie #devolver {lead_phone} para reativar."
+            f"✅ Conversa com {lead_phone} assumida.\n"
+            f"Sofia em silêncio por até {HUMAN_MODE_TTL_HOURS}h.\n"
+            f"Contexto da conversa sendo enviado...\n\n"
+            f"Para devolver: /sofia {lead_phone}"
         )
         log.info("[CMD] Operador %s assumiu conversa com %s", operator_phone, lead_phone)
         return True
@@ -1908,20 +2100,27 @@ async def _handle_operator_command(operator_phone: str, text: str) -> bool:
     elif cmd == "devolver":
         if not lead_phone:
             await loop.run_in_executor(None, send_whatsapp_message,
-                operator_phone, "Formato: #devolver 5511999998888"
+                operator_phone,
+                "Formato: /sofia 5511999998888\n"
+                "Também aceito: #devolver 5511999998888"
             )
             return True
+
         await _set_human_mode_triggered_by(
             lead_phone, False,
             triggered_by="whatsapp_command",
             operator=operator_phone,
             note="Devolvido para Sofia via WhatsApp"
         )
+
+        # ── Mensagem de retomada para o lead (opcional, sutil) ────────────────
+        # Sofia reassume sem o lead perceber descontinuidade
         await loop.run_in_executor(None, send_whatsapp_message,
             operator_phone,
-            f"Sofia reativada para {lead_phone}."
+            f"✅ Sofia reativada para {lead_phone}.\n"
+            f"Ela retoma a conversa normalmente na próxima mensagem do lead."
         )
-        log.info("[CMD] Operador %s devolveu conversa com %s para Sofia", operator_phone, lead_phone)
+        log.info("[CMD] Operador %s devolveu %s para Sofia", operator_phone, lead_phone)
         return True
 
     elif cmd == "status":
@@ -2071,6 +2270,7 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
         if _detect_visit_confirmation(reply_clean):
             asyncio.create_task(_supabase_confirm_visit(sender, reply_clean))
             asyncio.create_task(_create_calendar_event_for_visit(sender, reply_clean, history))
+            asyncio.create_task(_generate_and_send_dossie(sender, list(history)))
 
         # ── Extrai perfil estruturado do lead após N turnos ──────────────────────
         if len([m for m in history if m.get("role") == "user"]) >= _PROFILE_EXTRACTION_TURNS:
