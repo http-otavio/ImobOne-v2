@@ -18,7 +18,9 @@
       "priority": 9,
       "status": "pending",
       "depends_on": [],
-      "blocks": ["lead-routing-crm"]
+      "blocks": [
+        "lead-routing-crm"
+      ]
     },
     {
       "id": "followup-audio-vip",
@@ -60,7 +62,9 @@
       "priority": 6,
       "status": "pending",
       "depends_on": [],
-      "blocks": ["followup-crm-reativacao"]
+      "blocks": [
+        "followup-crm-reativacao"
+      ]
     },
     {
       "id": "dashboard-realtime",
@@ -97,7 +101,7 @@
         "tools/whatsapp.py"
       ],
       "priority": 8,
-      "status": "pending",
+      "status": "done",
       "depends_on": [],
       "blocks": []
     },
@@ -114,11 +118,13 @@
       ],
       "context_files": [
         "whatsapp_webhook.py",
-        "followup_engine.py"
+        "tools/dossie.py"
       ],
       "priority": 7,
-      "status": "pending",
-      "depends_on": ["human-takeover-concierge"],
+      "status": "done",
+      "depends_on": [
+        "human-takeover-concierge"
+      ],
       "blocks": []
     },
     {
@@ -162,7 +168,9 @@
       "priority": "critical",
       "status": "pending",
       "depends_on": [],
-      "blocks": ["sellers-ai-dossier"]
+      "blocks": [
+        "sellers-ai-dossier"
+      ]
     },
     {
       "id": "sellers-ai-dossier",
@@ -183,7 +191,9 @@
       ],
       "priority": "critical",
       "status": "pending",
-      "depends_on": ["off-market-engine"],
+      "depends_on": [
+        "off-market-engine"
+      ],
       "blocks": []
     },
     {
@@ -206,7 +216,9 @@
       "priority": "critical",
       "status": "pending",
       "depends_on": [],
-      "blocks": ["liquidity-yield-dossier"]
+      "blocks": [
+        "liquidity-yield-dossier"
+      ]
     },
     {
       "id": "liquidity-yield-dossier",
@@ -226,7 +238,10 @@
       ],
       "priority": "critical",
       "status": "pending",
-      "depends_on": ["dossie-de-caviar", "permuta-triage"],
+      "depends_on": [
+        "dossie-de-caviar",
+        "permuta-triage"
+      ],
       "blocks": []
     },
     {
@@ -252,7 +267,9 @@
       "priority": "critical",
       "status": "done",
       "depends_on": [],
-      "blocks": ["pipeline-roi-calc"]
+      "blocks": [
+        "pipeline-roi-calc"
+      ]
     },
     {
       "id": "pipeline-roi-calc",
@@ -337,7 +354,9 @@
       ],
       "priority": 7,
       "status": "done",
-      "depends_on": ["weekly-owner-report"],
+      "depends_on": [
+        "weekly-owner-report"
+      ],
       "blocks": []
     },
     {
@@ -384,7 +403,9 @@
       ],
       "priority": 8,
       "status": "pending",
-      "depends_on": ["weekly-owner-report"],
+      "depends_on": [
+        "weekly-owner-report"
+      ],
       "blocks": []
     }
   ]
