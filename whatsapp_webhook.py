@@ -1649,6 +1649,21 @@ async def webhook(request: Request):
     if not text and not is_media:
         return Response(status_code=200)
 
+    # ── Off-market: corretor envia áudio → ingestão de pocket listing ────────
+    # Intercept ANTES de passar para o fluxo normal do lead.
+    # Só ativa quando: remetente é corretor cadastrado E mensagem é áudio.
+    if is_media and media_info.get("type") == "audio":
+        asyncio.create_task(
+            _maybe_process_off_market_audio(sender, message_key)
+        )
+        # Se for corretor, não processa como mensagem de lead
+        try:
+            from tools.off_market import is_corretor_sender
+            if is_corretor_sender(sender, ONBOARDING):
+                return Response(status_code=200)
+        except ImportError:
+            pass
+
     # Dispara processamento assíncrono — lock por sender garante ordem
     asyncio.create_task(_process_media_and_reply(sender, text, media_info if is_media else None))
     return Response(status_code=200)
@@ -1849,6 +1864,84 @@ async def _generate_and_send_dossie(sender: str, history: list[dict]) -> None:
         ))
     except Exception as e:
         log.error("dossie: falha no pipeline para %s: %s", sender, e)
+
+
+async def _maybe_process_off_market_audio(sender: str, message_key: dict) -> None:
+    """
+    Se o remetente for um corretor cadastrado, transcreve o áudio via Whisper
+    e aciona o pipeline off-market (extração → pgvector → matchmaking).
+    Fire-and-forget — nunca bloqueia o fluxo principal.
+    """
+    try:
+        from tools.off_market import is_corretor_sender, process_off_market_audio
+    except ImportError:
+        return
+
+    if not is_corretor_sender(sender, ONBOARDING):
+        return  # não é corretor — áudio segue o fluxo normal de lead
+
+    log.info("[OFF_MARKET] Áudio de corretor %s detectado — iniciando ingestão", sender)
+
+    # 1. Transcreve via Whisper (já implementado no webhook)
+    transcription = await _transcribe_audio(message_key)
+    if not transcription:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None, send_whatsapp_message, sender,
+            "❌ Não consegui transcrever o áudio. Por favor, tente novamente ou envie por texto."
+        )
+        return
+
+    log.info("[OFF_MARKET] Transcrição: %s", transcription[:120])
+
+    # Confirmação imediata ao corretor
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        None, send_whatsapp_message, sender,
+        "🔍 Recebi o imóvel. Analisando e buscando matches na base de leads VIP..."
+    )
+
+    # 2. Pipeline off-market (síncrono em executor para não bloquear o event loop)
+    client_id = _ctx_client_id()
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: process_off_market_audio(
+                transcription=transcription,
+                corretor_phone=sender,
+                client_id=client_id,
+                onboarding=ONBOARDING,
+            )
+        )
+        matches = result.get("matches_sent", 0)
+        imovel_id = result.get("imovel_id", "")
+        imovel    = result.get("imovel_data", {})
+        bairro    = imovel.get("bairro", "?")
+        tipologia = imovel.get("tipologia", "?")
+
+        if matches > 0:
+            await loop.run_in_executor(
+                None, send_whatsapp_message, sender,
+                f"✅ Imóvel registrado (`{imovel_id}`).\n"
+                f"📍 {tipologia.title()} em {bairro}\n"
+                f"🎯 {matches} lead{'s' if matches != 1 else ''} compatível{'is' if matches != 1 else ''} "
+                f"identificado{'s' if matches != 1 else ''}. Drafts de abordagem enviados acima."
+            )
+        else:
+            await loop.run_in_executor(
+                None, send_whatsapp_message, sender,
+                f"✅ Imóvel registrado (`{imovel_id}`).\n"
+                f"📍 {tipologia.title()} em {bairro}\n"
+                f"ℹ️ Nenhum lead VIP com perfil compatível no momento. "
+                f"O imóvel está indexado — quando um lead adequado entrar, você será notificado."
+            )
+
+    except Exception as e:
+        log.error("[OFF_MARKET] Falha no pipeline para corretor %s: %s", sender, e)
+        await loop.run_in_executor(
+            None, send_whatsapp_message, sender,
+            "⚠️ Erro ao processar o imóvel. Tente novamente em alguns minutos."
+        )
 
 
 async def _update_pipeline_value(sender: str, imovel_id: str) -> None:
