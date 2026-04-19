@@ -149,6 +149,7 @@
     },
     {
       "id": "off-market-engine",
+      "status": "done",
       "title": "Motor de Pocket Listings e Matchmaking Sigiloso",
       "description": "Criar fluxo de ingestão via áudio no WhatsApp exclusivo para corretores. O sistema deve transcrever o áudio, extrair características do imóvel off-market, salvar no Supabase pgvector em um namespace is_off_market=true (invisível para buscas públicas) e acionar o followup_engine.py para cruzar passivamente com a base de leads VIP.",
       "acceptance_criteria": [
