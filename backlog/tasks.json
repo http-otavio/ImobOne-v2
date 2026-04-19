@@ -199,6 +199,7 @@
     },
     {
       "id": "permuta-triage",
+      "status": "done",
       "title": "Fluxo de Qualificação Complexa de Permutas",
       "description": "Atualizar o grafo LangGraph e o prompt do consultor base para identificar proativamente cenários de permuta em leads de alto padrão. Extrair dados do ativo oferecido, avaliar peso financeiro conforme rules.md do cliente e adicionar no score_breakdown.",
       "acceptance_criteria": [
