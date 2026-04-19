@@ -175,6 +175,7 @@
     },
     {
       "id": "sellers-ai-dossier",
+      "status": "done",
       "title": "Dossiê de Captação e Posicionamento de Mercado",
       "description": "Construir módulo para proprietários. Quando acionado, o sistema busca dados reais da vizinhança (Places API) e cruza com a média de preço/m² de imóveis similares no pgvector, gerando um dossiê em Markdown/PDF focado em 'como vender este imóvel'.",
       "acceptance_criteria": [
