@@ -1137,6 +1137,36 @@ async def _notify_corretor(
     # Gera resumo estratégico antes de enviar
     resumo = await _gerar_resumo_estrategico(history, lead_name)
 
+    # Verifica se há dados de permuta para incluir no briefing
+    permuta_section = ""
+    permuta_redis_key = f"whatsapp:permuta_detectada:{sender}"
+    has_permuta = False
+    if redis_client:
+        try:
+            has_permuta = bool(await redis_client.get(permuta_redis_key))
+        except Exception:
+            pass
+    if has_permuta:
+        try:
+            from tools.permuta import format_permuta_briefing_section
+            sb = _get_supabase()
+            if sb:
+                loop_p = asyncio.get_event_loop()
+                lead_row = await loop_p.run_in_executor(None, lambda: (
+                    sb.table("leads")
+                      .select("permuta_dados")
+                      .eq("lead_phone", sender)
+                      .eq("client_id", _ctx_client_id())
+                      .limit(1)
+                      .execute()
+                ))
+                rows = lead_row.data if lead_row else []
+                if rows and rows[0].get("permuta_dados"):
+                    permuta_data = rows[0]["permuta_dados"]
+                    permuta_section = "\n\n━━━━━━━━━━━━━━━\n" + format_permuta_briefing_section(permuta_data)
+        except Exception as e:
+            log.warning("[PERMUTA] Falha ao gerar seção de permuta no briefing: %s", e)
+
     msg = (
         f"🔔 *Lead Quente — Sofia IA*\n\n"
         f"📱 *Número:* {sender}\n"
@@ -1146,7 +1176,8 @@ async def _notify_corretor(
         f"━━━━━━━━━━━━━━━\n"
         f"*BRIEFING ESTRATÉGICO*\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"{resumo}\n\n"
+        f"{resumo}"
+        f"{permuta_section}\n\n"
         f"_Gerado automaticamente por Sofia IA_"
     )
 
@@ -1866,6 +1897,106 @@ async def _generate_and_send_dossie(sender: str, history: list[dict]) -> None:
         log.error("dossie: falha no pipeline para %s: %s", sender, e)
 
 
+async def _check_and_process_permuta(
+    sender: str,
+    user_message: str,
+    history: list[dict],
+) -> None:
+    """
+    Detecta menção a permuta/troca na mensagem do lead.
+    Se detectado E ainda não registrado no Redis para este sender:
+        1. Seta flag permuta_detectada no Redis (TTL 30 dias)
+        2. Extrai dados do ativo via Claude Haiku (run_in_executor)
+        3. Calcula bonus de score (+3 pts para ativo de alto padrão)
+        4. Salva em leads.permuta_dados no Supabase
+
+    A seção 'Análise de Permuta' é injetada no briefing do corretor via
+    _build_corretor_briefing quando permuta_detectada=true no Redis.
+    Fire-and-forget — nunca bloqueia o fluxo principal.
+    """
+    try:
+        from tools.permuta import (
+            detect_permuta,
+            extract_permuta_data,
+            calculate_permuta_score_bonus,
+            save_permuta_data,
+        )
+    except ImportError:
+        log.warning("[PERMUTA] tools.permuta não disponível — skip")
+        return
+
+    try:
+        # 1. Detecção rápida via regex
+        if not detect_permuta(user_message):
+            return
+
+        # 2. Idempotência: já detectamos permuta para este lead?
+        permuta_redis_key = f"whatsapp:permuta_detectada:{sender}"
+        if redis_client:
+            try:
+                already = await redis_client.get(permuta_redis_key)
+                if already:
+                    log.debug("[PERMUTA] Já detectado para %s — skip extração", sender)
+                    return
+            except Exception:
+                pass
+
+        log.info("[PERMUTA] Menção a permuta detectada para %s", sender)
+
+        # 3. Seta flag no Redis imediatamente (TTL 30 dias)
+        if redis_client:
+            try:
+                await redis_client.set(permuta_redis_key, "1", ex=86400 * 30)
+            except Exception:
+                pass
+
+        # 4. Extrai dados do ativo via Claude Haiku (síncrono em executor)
+        loop = asyncio.get_event_loop()
+        try:
+            permuta_data = await loop.run_in_executor(
+                None, extract_permuta_data, history
+            )
+        except Exception as e:
+            log.warning("[PERMUTA] Falha ao extrair dados do ativo: %s", e)
+            from datetime import datetime as _dt, timezone as _tz
+            permuta_data = {
+                "tipo_ativo":     None,
+                "descricao_lead": user_message[:300],
+                "extracted_at":   _dt.now(_tz.utc).isoformat(),
+            }
+
+        # 5. Calcula bonus de score
+        score_bonus = calculate_permuta_score_bonus(permuta_data, ONBOARDING)
+        log.info("[PERMUTA] Score bonus: +%d para %s", score_bonus, sender)
+
+        # 6. Persiste no Supabase
+        client_id = _ctx_client_id()
+        await loop.run_in_executor(
+            None,
+            save_permuta_data,
+            sender,
+            client_id,
+            permuta_data,
+            score_bonus,
+        )
+
+        # 7. Acumula bonus de score no Redis
+        if redis_client and score_bonus > 0:
+            try:
+                current_score_key = f"whatsapp:score:{sender}"
+                current_raw = await redis_client.get(current_score_key)
+                current = int(current_raw) if current_raw else 0
+                new_total = current + score_bonus
+                await redis_client.set(current_score_key, new_total, ex=86400 * 7)
+                log.info("[PERMUTA] Score atualizado: %s → %d (+%d permuta)",
+                         sender, new_total, score_bonus)
+            except Exception:
+                pass
+
+    except Exception as e:
+        log.error("[PERMUTA] Erro inesperado no pipeline de permuta: %s", e)
+
+
 async def _maybe_process_off_market_audio(sender: str, message_key: dict) -> None:
     """
     Se o remetente for um corretor cadastrado, transcreve o áudio via Whisper
@@ -2358,6 +2489,9 @@ async def _process_media_and_reply(sender: str, text: str, media_info: dict | No
         motivo_descarte = _detect_discard_signal(user_message)
         if motivo_descarte:
             asyncio.create_task(_supabase_mark_descartado(sender, motivo_descarte))
+
+        # ── Detecta menção a permuta/troca no lead ────────────────────────────
+        asyncio.create_task(_check_and_process_permuta(sender, user_message, list(history)))
 
         # ── Detecta confirmação de visita na resposta da Sofia ───────────────
         if _detect_visit_confirmation(reply_clean):
