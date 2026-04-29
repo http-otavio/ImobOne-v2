@@ -225,6 +225,7 @@
     },
     {
       "id": "liquidity-yield-dossier",
+      "status": "done",
       "title": "Expansão Hard Skills do Dossiê de Caviar — Métricas Financeiras",
       "description": "Injetar dados quantitativos no Dossiê de Caviar. Integrar lógica para buscar histórico de valorização de CEP/região e liquidez estimada para leads perfil investidor. Nunca gera dados financeiros inventados — só exibe seção se dados verificáveis estiverem disponíveis.",
       "acceptance_criteria": [
