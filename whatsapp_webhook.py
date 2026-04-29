@@ -1880,6 +1880,52 @@ async def _generate_and_send_dossie(sender: str, history: list[dict]) -> None:
     imobiliaria = ONBOARDING.get("nome_imobiliaria", "Imobiliária")
     client_id   = _ctx_client_id()
 
+    # Detecta perfil investidor → busca dados de liquidez quando disponível
+    liquidity_data = None
+    try:
+        r_profile = await asyncio.get_event_loop().run_in_executor(None, lambda: (
+            sb.table("lead_profiles")
+              .select("purchase_purpose,neighborhoods")
+              .eq("lead_phone", sender)
+              .eq("client_id", client_id)
+              .limit(1)
+              .execute()
+        ))
+        if r_profile.data:
+            prow = r_profile.data[0]
+            purpose = (prow.get("purchase_purpose") or "").lower()
+            is_investidor = "investimento" in purpose
+            bairros = prow.get("neighborhoods") or []
+            bairro_interesse = ""
+            if isinstance(bairros, list) and bairros:
+                bairro_interesse = bairros[0]
+            elif isinstance(bairros, str) and bairros:
+                bairro_interesse = bairros
+
+            if is_investidor and bairro_interesse:
+                try:
+                    from tools.liquidity import buscar_dados_liquidez
+                    tipologia = "apartamento"
+                    loop_liq = asyncio.get_event_loop()
+                    liquidity_data = await loop_liq.run_in_executor(
+                        None,
+                        lambda: buscar_dados_liquidez(bairro_interesse, tipologia, client_id),
+                    )
+                    if liquidity_data:
+                        log.info(
+                            "dossie: métricas financeiras disponíveis para %s (bairro: %s)",
+                            sender, bairro_interesse,
+                        )
+                    else:
+                        log.info(
+                            "dossie: sem dados de liquidez para '%s' — seção omitida",
+                            bairro_interesse,
+                        )
+                except Exception as e_liq:
+                    log.warning("dossie: falha ao buscar liquidez: %s", e_liq)
+    except Exception as e:
+        log.debug("dossie: falha ao buscar lead_profiles para %s: %s", sender, e)
+
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(None, lambda: build_and_send_dossie(
@@ -1892,6 +1938,7 @@ async def _generate_and_send_dossie(sender: str, history: list[dict]) -> None:
             visit_date=visit_date_str,
             client_id=client_id,
             imobiliaria=imobiliaria,
+            liquidity_data=liquidity_data,
         ))
     except Exception as e:
         log.error("dossie: falha no pipeline para %s: %s", sender, e)

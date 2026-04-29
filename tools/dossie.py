@@ -68,7 +68,7 @@ Data da visita: {visit_date}
 HISTÓRICO COMPLETO DA CONVERSA
 ────────────────────────────────
 {history_text}
-
+{metricas_financeiras_bloco}
 Produza o dossiê em JSON com EXATAMENTE esta estrutura (sem campos extras):
 {{
   "perfil": {{
@@ -100,7 +100,8 @@ Produza o dossiê em JSON com EXATAMENTE esta estrutura (sem campos extras):
     "comportamento ou frase que indica alta intenção — específico, com contexto"
   ],
   "proximo_passo": "ação concreta e específica para o corretor na visita ou imediatamente após. Seja prescritivo.",
-  "pontos_de_atencao": "sensibilidades, tópicos a evitar ou riscos de perder o lead — máx 2 linhas"
+  "pontos_de_atencao": "sensibilidades, tópicos a evitar ou riscos de perder o lead — máx 2 linhas",
+  "metricas_financeiras": null
 }}
 
 Regras absolutas:
@@ -108,6 +109,15 @@ Regras absolutas:
 - Se não houver informação sobre um campo, use "Não informado".
 - hot_buttons e sinais_quentes devem citar frases ou comportamentos reais da conversa.
 - proximo_passo deve ser prescritivo e específico — não genérico.
+- DADOS FINANCEIROS — CRÍTICO: NUNCA invente valorização, yield, cap rate, rentabilidade
+  ou qualquer percentual financeiro. Se o bloco MÉTRICAS FINANCEIRAS estiver presente
+  acima, use APENAS os dados dele (com a fonte explícita). Se não estiver presente OU
+  o perfil do lead não for investimento, defina "metricas_financeiras": null.
+  A seção metricas_financeiras só deve ser preenchida quando AMBAS as condições forem
+  verdadeiras: (1) busca.uso == "investimento" E (2) dados financeiros estão no bloco acima.
+- Se metricas_financeiras for preenchida, use este formato:
+  {{"valorizacao_aa": "X% ao ano (Fonte Y, Período Z)", "liquidez_dias": N,
+    "comparativo_fii": "valorização X% vs FII Y Z% a.a."}}
 - Responda APENAS com o JSON válido. Sem texto antes ou depois.\
 """
 
@@ -119,11 +129,16 @@ def generate_dossie_content(
     score: int = 0,
     pipeline: float | None = None,
     visit_date: str | None = None,
+    liquidity_data: dict | None = None,
 ) -> dict:
     """
     Claude Sonnet analisa o histórico e retorna dict estruturado do dossiê.
     Síncrono — chamar via asyncio.run_in_executor.
     Lança exceção se o JSON não puder ser parseado.
+
+    liquidity_data: dados de liquidez de tools/liquidity.py — injetados na seção
+    'Métricas Financeiras' SOMENTE quando perfil é investidor. Quando None, a seção
+    é omitida (nunca inventada).
     """
     if _anthropic_module is None:
         raise ImportError("anthropic não instalado")
@@ -139,6 +154,16 @@ def generate_dossie_content(
     visit_str    = visit_date or "A confirmar"
     visita_flag  = " — VISITA CONFIRMADA" if visit_date else ""
 
+    # Prepara bloco de métricas financeiras (apenas se dados verificáveis disponíveis)
+    if liquidity_data:
+        try:
+            from tools.liquidity import format_metricas_financeiras
+            metricas_bloco = "\n\n" + format_metricas_financeiras(liquidity_data) + "\n"
+        except Exception:
+            metricas_bloco = ""
+    else:
+        metricas_bloco = ""
+
     prompt = _DOSSIE_PROMPT.format(
         lead_name=lead_name or "Não informado",
         lead_phone=lead_phone,
@@ -147,6 +172,7 @@ def generate_dossie_content(
         pipeline=pipeline_str,
         visit_date=visit_str,
         history_text=history_text,
+        metricas_financeiras_bloco=metricas_bloco,
     )
 
     client = _anthropic_module.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -417,6 +443,29 @@ def render_dossie_pdf(
         section("⚠ Pontos de Atenção")
         story.append(Paragraph(atencao, st_warning))
 
+    # ── MÉTRICAS FINANCEIRAS (apenas perfil investidor, dados verificados) ──
+    metricas = content.get("metricas_financeiras")
+    if metricas and isinstance(metricas, dict):
+        section("Métricas Financeiras Verificadas")
+        mf_rows = []
+        if metricas.get("valorizacao_aa"):
+            mf_rows.append(("Valorização histórica", str(metricas["valorizacao_aa"])))
+        if metricas.get("liquidez_dias") is not None:
+            mf_rows.append(("Liquidez estimada",
+                            f"{metricas['liquidez_dias']} dias médios para venda na região"))
+        if metricas.get("comparativo_fii"):
+            mf_rows.append(("Comparativo FII", str(metricas["comparativo_fii"])))
+        if mf_rows:
+            kv_table(mf_rows)
+        story.append(Paragraph(
+            "<font color='#888899' size='8'>"
+            "Dados verificados com fonte explícita. Não representam projeção ou garantia."
+            "</font>",
+            style("MfDisclaimer", fontSize=8, leading=10,
+                  textColor=colors.HexColor("#888899"),
+                  fontName="Helvetica", spaceAfter=4),
+        ))
+
     # ── FOOTER ──────────────────────────────────────────────────────────────
     story.append(Spacer(1, 0.8 * cm))
     story.append(HRFlowable(width="100%", thickness=0.3, color=c_bord))
@@ -532,6 +581,7 @@ def build_and_send_dossie(
     evolution_url: str = "",
     evolution_api_key: str = "",
     save_local: bool = True,
+    liquidity_data: dict | None = None,
 ) -> None:
     """
     Orquestra o pipeline completo: gera conteúdo → PDF → envia ao corretor.
@@ -549,6 +599,7 @@ def build_and_send_dossie(
         score=score,
         pipeline=pipeline,
         visit_date=visit_date,
+        liquidity_data=liquidity_data,
     )
     log.info("[DOSSIE] Conteúdo gerado OK para %s", lead_phone)
 
