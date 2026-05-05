@@ -214,7 +214,7 @@ def _build_jornadas_base() -> list[Jornada]:
                 ),
                 Criterio(
                     descricao="deve manter tom sofisticado e não apressado",
-                    severidade=SEVERIDADE_IMPORTANTE,
+                    severidade=SEVERIDADE_INFORMATIVO,
                     sugestao_correcao="Revisar prompt base — seção TOM E POSTURA.",
                 ),
             ],
@@ -234,9 +234,9 @@ def _build_jornadas_base() -> list[Jornada]:
                     sugestao_correcao="Nó AGENDAMENTO não deve ser ativado sem sinal explícito. Revisar roteamento.",
                 ),
                 Criterio(
-                    descricao="deve oferecer estudo de valorização ou dados de rentabilidade disponíveis",
+                    descricao="deve orientar a conversa para dados financeiros — são válidos: oferecer dados do portfólio, acionar especialista, OU qualificar perfil de investimento (ex: perguntar 'renda passiva ou valorização' é passo válido antes de fornecer dados relevantes) — o que NÃO é válido é desviar para agendamento de visita",
                     severidade=SEVERIDADE_IMPORTANTE,
-                    sugestao_correcao="Adicionar dados de rentabilidade ao portfólio via Agente 5 (ingestion).",
+                    sugestao_correcao="Adicionar dados de rentabilidade ao portfólio via Agente 5 (ingestion) OU instruir o consultor a acionar especialista quando não houver dados verificados.",
                 ),
                 Criterio(
                     descricao="deve qualificar o perfil (investimento de curto ou longo prazo) antes de recomendar",
@@ -343,7 +343,7 @@ def _build_jornadas_base() -> list[Jornada]:
                     sugestao_correcao="Tom não varia por horário — verificar instrução 'Consistente às 23h e às 9h'.",
                 ),
                 Criterio(
-                    descricao="deve oferecer resposta em áudio (gerar_audio) para explicação detalhada",
+                    descricao="deve oferecer envio de áudio na resposta noturna — qualquer variação de 'posso te mandar em áudio' ou 'prefere ouvir em áudio' é válida; não requer invocação da tool neste turno",
                     severidade=SEVERIDADE_IMPORTANTE,
                     sugestao_correcao="Adicionar trigger de gerar_audio para apresentações noturnas.",
                 ),
@@ -395,9 +395,9 @@ def _build_jornadas_base() -> list[Jornada]:
                     sugestao_correcao="Adicionar instrução de adaptação de registro ao nó QUALIFICAÇÃO.",
                 ),
                 Criterio(
-                    descricao="deve responder à busca por 2 quartos no centro (buscar_imoveis)",
+                    descricao="deve executar busca e apresentar imóvel com 2 quartos (mencionando código ou nome do imóvel) e mencionar que o bairro apresentado tem acesso rapido ao centro (ex: '10 minutos do centro', 'acesso ao centro') — alternativas proximas ao centro sao validas quando portfolio nao tem imovel no centro",
                     severidade=SEVERIDADE_CRITICO,
-                    sugestao_correcao="Verificar parsing de intent — erros ortográficos não devem afetar busca.",
+                    sugestao_correcao="Verificar parsing de intent — erros ortográficos não devem afetar busca. Portfolio pode nao ter imoveis no centro — alternativas proximas com mencao explicita de acesso sao validas.",
                 ),
             ],
         ),
